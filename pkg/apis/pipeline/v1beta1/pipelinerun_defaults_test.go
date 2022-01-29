@@ -26,7 +26,6 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/pod"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
-	"github.com/tektoncd/pipeline/pkg/contexts"
 	"github.com/tektoncd/pipeline/test/diff"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,10 +34,9 @@ import (
 
 func TestPipelineRunSpec_SetDefaults(t *testing.T) {
 	cases := []struct {
-		desc  string
-		prs   *v1beta1.PipelineRunSpec
-		want  *v1beta1.PipelineRunSpec
-		ctxFn func(context.Context) context.Context
+		desc string
+		prs  *v1beta1.PipelineRunSpec
+		want *v1beta1.PipelineRunSpec
 	}{
 		{
 			desc: "timeout is nil",
@@ -85,115 +83,22 @@ func TestPipelineRunSpec_SetDefaults(t *testing.T) {
 				},
 			},
 		},
-		{
-			desc: "implicit params",
-			ctxFn: func(ctx context.Context) context.Context {
-				cfg := config.FromContextOrDefaults(ctx)
-				cfg.FeatureFlags = &config.FeatureFlags{EnableAPIFields: "alpha"}
-				return config.ToContext(ctx, cfg)
-			},
-			prs: &v1beta1.PipelineRunSpec{
-				Params: []v1beta1.Param{
-					{
-						Name: "foo",
-						Value: v1beta1.ArrayOrString{
-							StringVal: "a",
-						},
-					},
-					{
-						Name: "bar",
-						Value: v1beta1.ArrayOrString{
-							ArrayVal: []string{"b"},
-						},
-					},
-				},
-				PipelineSpec: &v1beta1.PipelineSpec{
-					Tasks: []v1beta1.PipelineTask{{
-						TaskSpec: &v1beta1.EmbeddedTask{
-							TaskSpec: v1beta1.TaskSpec{},
-						},
-					}},
-				},
-			},
-			want: &v1beta1.PipelineRunSpec{
-				ServiceAccountName: config.DefaultServiceAccountValue,
-				Timeout:            &metav1.Duration{Duration: config.DefaultTimeoutMinutes * time.Minute},
-				Params: []v1beta1.Param{
-					{
-						Name: "foo",
-						Value: v1beta1.ArrayOrString{
-							StringVal: "a",
-						},
-					},
-					{
-						Name: "bar",
-						Value: v1beta1.ArrayOrString{
-							ArrayVal: []string{"b"},
-						},
-					},
-				},
-				PipelineSpec: &v1beta1.PipelineSpec{
-					Tasks: []v1beta1.PipelineTask{{
-						TaskSpec: &v1beta1.EmbeddedTask{
-							TaskSpec: v1beta1.TaskSpec{
-								Params: []v1beta1.ParamSpec{
-									{
-										Name: "foo",
-										Type: v1beta1.ParamTypeString,
-									},
-									{
-										Name: "bar",
-										Type: v1beta1.ParamTypeArray,
-									},
-								},
-							},
-						},
-						Params: []v1beta1.Param{
-							{
-								Name: "foo",
-								Value: v1beta1.ArrayOrString{
-									Type:      v1beta1.ParamTypeString,
-									StringVal: "$(params.foo)",
-								},
-							},
-							{
-								Name: "bar",
-								Value: v1beta1.ArrayOrString{
-									Type:     v1beta1.ParamTypeArray,
-									ArrayVal: []string{"$(params.bar[*])"},
-								},
-							},
-						},
-					}},
-					Params: []v1beta1.ParamSpec{
-						{
-							Name: "foo",
-							Type: v1beta1.ParamTypeString,
-						},
-						{
-							Name: "bar",
-							Type: v1beta1.ParamTypeArray,
-						},
-					},
-				},
-			},
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.desc, func(t *testing.T) {
 			ctx := context.Background()
-			if tc.ctxFn != nil {
-				ctx = tc.ctxFn(ctx)
-			}
 			tc.prs.SetDefaults(ctx)
 
-			sortPS := func(x, y v1beta1.ParamSpec) bool {
+			sortParamSpecs := func(x, y v1beta1.ParamSpec) bool {
 				return x.Name < y.Name
 			}
-			sortP := func(x, y v1beta1.Param) bool {
+			sortParams := func(x, y v1beta1.Param) bool {
 				return x.Name < y.Name
 			}
-			if d := cmp.Diff(tc.want, tc.prs, cmpopts.SortSlices(sortPS), cmpopts.SortSlices(sortP)); d != "" {
+			sortTasks := func(x, y v1beta1.PipelineTask) bool {
+				return x.Name < y.Name
+			}
+			if d := cmp.Diff(tc.want, tc.prs, cmpopts.SortSlices(sortParamSpecs), cmpopts.SortSlices(sortParams), cmpopts.SortSlices(sortTasks)); d != "" {
 				t.Errorf("Mismatch of PipelineRunSpec %s", diff.PrintWantGot(d))
 			}
 		})
@@ -215,21 +120,6 @@ func TestPipelineRunDefaulting(t *testing.T) {
 				Timeout:            &metav1.Duration{Duration: config.DefaultTimeoutMinutes * time.Minute},
 			},
 		},
-	}, {
-		name: "PipelineRef upgrade context",
-		in: &v1beta1.PipelineRun{
-			Spec: v1beta1.PipelineRunSpec{
-				PipelineRef: &v1beta1.PipelineRef{Name: "foo"},
-			},
-		},
-		want: &v1beta1.PipelineRun{
-			Spec: v1beta1.PipelineRunSpec{
-				PipelineRef:        &v1beta1.PipelineRef{Name: "foo"},
-				ServiceAccountName: config.DefaultServiceAccountValue,
-				Timeout:            &metav1.Duration{Duration: config.DefaultTimeoutMinutes * time.Minute},
-			},
-		},
-		wc: contexts.WithUpgradeViaDefaulting,
 	}, {
 		name: "Embedded PipelineSpec default",
 		in: &v1beta1.PipelineRun{
@@ -253,7 +143,6 @@ func TestPipelineRunDefaulting(t *testing.T) {
 				Timeout:            &metav1.Duration{Duration: config.DefaultTimeoutMinutes * time.Minute},
 			},
 		},
-		wc: contexts.WithUpgradeViaDefaulting,
 	}, {
 		name: "PipelineRef default config context",
 		in: &v1beta1.PipelineRun{

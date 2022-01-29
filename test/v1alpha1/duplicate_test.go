@@ -24,14 +24,15 @@ import (
 	"sync"
 	"testing"
 
-	tb "github.com/tektoncd/pipeline/internal/builder/v1alpha1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	knativetest "knative.dev/pkg/test"
 	"knative.dev/pkg/test/helpers"
 )
 
-// TestDuplicatePodTaskRun creates 10 builds and checks that each of them has only one build pod.
+// TestDuplicatePodTaskRun creates multiple builds and checks that each of them has only one build pod.
 func TestDuplicatePodTaskRun(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -43,17 +44,24 @@ func TestDuplicatePodTaskRun(t *testing.T) {
 	defer tearDown(ctx, t, c, namespace)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
+	// The number of builds generated has a direct impact on test
+	// runtime and is traded off against proving the taskrun
+	// reconciler's efficacy at not duplicating pods.
+	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		taskrunName := helpers.ObjectNameForTest(t)
 		t.Logf("Creating taskrun %q.", taskrunName)
 
-		taskrun := tb.TaskRun(taskrunName, tb.TaskRunSpec(
-			tb.TaskRunTaskSpec(tb.Step("busybox",
-				tb.StepCommand("/bin/echo"),
-				tb.StepArgs("simple"),
-			)),
-		))
+		taskrun := parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  taskSpec:
+    steps:
+    - image: busybox
+      command: ['/bin/echo']
+      args: ['simple']
+`, taskrunName))
 		if _, err := c.TaskRunClient.Create(ctx, taskrun, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("Error creating taskrun: %v", err)
 		}

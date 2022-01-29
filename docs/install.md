@@ -9,20 +9,30 @@ weight: 100
 
 This guide explains how to install Tekton Pipelines. It covers the following topics:
 
-* [Before you begin](#before-you-begin)
-* [Installing Tekton Pipelines on Kubernetes](#installing-tekton-pipelines-on-kubernetes)
-* [Installing Tekton Pipelines on OpenShift](#installing-tekton-pipelines-on-openshift)
-* [Configuring PipelineResource storage](#configuring-pipelineresource-storage)
-* [Customizing basic execution parameters](#customizing-basic-execution-parameters)
-  * [Customizing the Pipelines Controller behavior](#customizing-the-pipelines-controller-behavior)
-* [Configuring High Availability](#configuring-high-availability)
-* [Configuring Tekton pipeline controller performance](#configuring-tekton-pipeline-controller-performance)
-* [Creating a custom release of Tekton Pipelines](#creating-a-custom-release-of-tekton-pipelines)
-* [Next steps](#next-steps)
+- [Before you begin](#before-you-begin)
+- [Installing Tekton Pipelines on Kubernetes](#installing-tekton-pipelines-on-kubernetes)
+    - [Installing Tekton Pipelines on OpenShift](#installing-tekton-pipelines-on-openshift)
+- [Configuring PipelineResource storage](#configuring-pipelineresource-storage)
+    - [Configuring a persistent volume](#configuring-a-persistent-volume)
+    - [Configuring a cloud storage bucket](#configuring-a-cloud-storage-bucket)
+        - [Example configuration for an S3 bucket](#example-configuration-for-an-s3-bucket)
+        - [Example configuration for a GCS bucket](#example-configuration-for-a-gcs-bucket)
+- [Configuring CloudEvents notifications](#configuring-cloudevents-notifications)
+- [Configuring self-signed cert for private registry](#configuring-self-signed-cert-for-private-registry)
+- [Customizing basic execution parameters](#customizing-basic-execution-parameters)
+    - [Customizing the Pipelines Controller behavior](#customizing-the-pipelines-controller-behavior)
+    - [Alpha Features](#alpha-features)
+- [Configuring High Availability](#configuring-high-availability)
+- [Configuring tekton pipeline controller performance](#configuring-tekton-pipeline-controller-performance)
+- [Creating a custom release of Tekton Pipelines](#creating-a-custom-release-of-tekton-pipelines)
+- [Verify Tekton Pipelines release](#verify-tekton-pipelines-release)
+    - [Verify signatures using `cosign`](#verify-signatures-using-cosign)
+    - [Verify the tansparency logs using `rekor-cli`](#verify-the-transparency-logs-using-rekor-cli)
+- [Next steps](#next-steps)
 
 ## Before you begin
 
-1. You must have a Kubernetes cluster running version 1.19 or later.
+1. You must have a Kubernetes cluster running version 1.20 or later.
 
    If you don't already have a cluster, you can create one for testing with `kind`.
    [Install `kind`](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) and create a cluster by running [`kind create cluster`](https://kind.sigs.k8s.io/docs/user/quick-start/#creating-a-cluster). This
@@ -74,6 +84,9 @@ To install Tekton Pipelines on a Kubernetes cluster:
    kubectl apply --filename https://storage.googleapis.com/tekton-releases/pipeline/latest/release.notags.yaml
    ```
 
+1. **Note**: Some cloud providers (such as [GKE](https://github.com/tektoncd/pipeline/issues/3317#issuecomment-708066087))
+   may also require you to allow port 8443 in your firewall rules so that the Tekton Pipelines webhook is reachable.
+
 1. Monitor the installation using the following command until all components show a `Running` status:
 
    ```bash
@@ -99,7 +112,6 @@ for more information.
    uses the default `system:admin` user:
 
    ```bash
-   # For MiniShift: oc login -u admin:admin
    oc login -u system:admin
    ```
 
@@ -137,15 +149,14 @@ should take a look at [Red Hat CodeReady Containers](https://github.com/code-rea
 
 ## Configuring PipelineResource storage
 
+> :warning: **`PipelineResources` are [deprecated](deprecations.md#deprecation-table).**
+>
+> For storage, consider using [`Workspaces`](workspaces.md) with [`VolumeClaimTemplates`](https://github.com/tektoncd/pipeline/blob/main/docs/workspaces.md#volumeclaimtemplate)
+> to automatically provision and manage Persistent Volume Claims (PVCs). Read more in [TEP-0074](https://github.com/tektoncd/community/blob/main/teps/0074-deprecate-pipelineresources.md).
+
 PipelineResources are one of the ways that Tekton passes data between Tasks. If you intend to
 use PipelineResources in your Pipelines then you'll need to configure a storage location
 for that data to be put so that it can be shared between Tasks in the Pipeline.
-
-**Note:** Pipeline Resources are in alpha and are currently undergoing considerable redesign. Therefore
-this storage configuration is possibly going to change in future. Writing Tasks and Pipelines today that rely
-on this feature may mean you'll need to rewrite those Tasks and Pipelines when the redesign is complete. See
-the [explanation for the redesign in the PipelineResources doc](./resources.md#why-arent-pipelineresources-in-beta)
-and [issue 1673](https://github.com/tektoncd/pipeline/issues/1673) to follow along with the redesign work.
 
 The storage options available for sharing PipelineResources between Tasks in a Pipeline are:
 
@@ -399,7 +410,6 @@ Features currently in "alpha" are:
 | [Hermetic Execution Mode](./hermetic.md)                                        | [TEP-0025](https://github.com/tektoncd/community/blob/main/teps/0025-hermekton.md)                          | [v0.25.0](https://github.com/tektoncd/pipeline/releases/tag/v0.25.0) |                             |
 | [Graceful Termination](./pipelineruns.md#gracefully-cancelling-a-pipelinerun)   | [TEP-0058](https://github.com/tektoncd/community/blob/main/teps/0058-graceful-pipeline-run-termination.md)  | [v0.25.0](https://github.com/tektoncd/pipeline/releases/tag/v0.25.0) |                             |
 | [`PipelineRun` Timeouts](./pipelineruns.md#configuring-a-failure-timeout)       | [TEP-0046](https://github.com/tektoncd/community/blob/main/teps/0046-finallytask-execution-post-timeout.md) | [v0.25.0](https://github.com/tektoncd/pipeline/releases/tag/v0.25.0) |                             |
-| [Specifying `onError` for a `Step`](./tasks.md#specifying-onerror-for-a-step)   | [TEP-0040](https://github.com/tektoncd/community/blob/main/teps/0040-ignore-step-errors.md)                 | [v0.27.0](https://github.com/tektoncd/pipeline/releases/tag/v0.27.0) |                             |
 | [Implicit `Parameters`](./taskruns.md#implicit-parameters)                      | [TEP-0023](https://github.com/tektoncd/community/blob/main/teps/0023-implicit-mapping.md)                   | [v0.28.0](https://github.com/tektoncd/pipeline/releases/tag/v0.28.0) |                             |
 | [Windows Scrips](./tasks.md#windows-scripts)                                    | [TEP-0057](https://github.com/tektoncd/community/blob/main/teps/0057-windows-support.md)                    | [v0.28.0](https://github.com/tektoncd/pipeline/releases/tag/v0.28.0) |                             |
 
@@ -420,9 +430,216 @@ to better fit specific usecases.
 
 Out-of-the-box, Tekton Pipelines Controller is configured for relatively small-scale deployments but there have several options for configuring Pipelines' performance are available. See the [Performance Configuration](tekton-controller-performance-configuration.md) document which describes how to change the default ThreadsPerController, QPS and Burst settings to meet your requirements.
 
+## Platform Support
+
+The Tekton project provides support for running on x86 Linux Kubernetes nodes.
+
+The project produces images capable of running on other architectures and operating systems, but may not be able to help debug issues specific to those platforms as readily as those that affect Linux on x86.
+
+The controller and webhook components are currently built for:
+
+- linux/amd64
+- linux/arm64
+- linux/arm (Arm v7)
+- linux/ppc64le (PowerPC)
+- linux/s390x (IBM Z)
+
+The entrypoint component is also built for Windows, which enables TaskRun workloads to execute on Windows nodes.
+See [Windows documentation](windows.md) for more information.
+
+Additional components to support PipelineResources may be available for other architectures as well.
+
 ## Creating a custom release of Tekton Pipelines
 
 You can create a custom release of Tekton Pipelines by following and customizing the steps in [Creating an official release](https://github.com/tektoncd/pipeline/blob/main/tekton/README.md#create-an-official-release). For example, you might want to customize the container images built and used by Tekton Pipelines.
+
+## Verify Tekton Pipelines Release
+
+> We will refine this process over time to be more streamlined. For now, please follow the steps listed in this section
+to verify Tekton pipeline release.
+
+Tekton Pipeline's images are being signed by [Tekton Chains](https://github.com/tektoncd/chains) since [0.27.1](https://github.com/tektoncd/pipeline/releases/tag/v0.27.1). You can verify the images with
+`cosign` using the [Tekton's public key](https://raw.githubusercontent.com/tektoncd/chains/main/tekton.pub).
+
+### Verify signatures using `cosign`
+
+With Go 1.16+, you can install `cosign` by running:
+
+```shell
+go install github.com/sigstore/cosign/cmd/cosign@latest
+```
+
+You can verify Tekton Pipelines official images using the Tekton public key:
+
+```shell
+cosign verify -key https://raw.githubusercontent.com/tektoncd/chains/main/tekton.pub gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller:v0.28.1
+```
+
+which results in:
+
+```shell
+Verification for gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller:v0.28.1 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+  - Any certificates were verified against the Fulcio roots.
+{
+  "Critical": {
+    "Identity": {
+      "docker-reference": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller"
+    },
+    "Image": {
+      "Docker-manifest-digest": "sha256:0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8"
+    },
+    "Type": "Tekton container signature"
+  },
+  "Optional": {}
+}
+```
+
+The verification shows a list of checks performed and returns the digest in `Critical.Image.Docker-manifest-digest`
+which can be used to retrieve the provenance from the transparency logs for that image using `rekor-cli`.
+
+### Verify the transparency logs using `rekor-cli`
+
+Install the `rekor-cli` by running:
+
+```shell
+go install -v github.com/sigstore/rekor/cmd/rekor-cli@latest
+```
+
+Now, use the digest collected from the previous [section](#verify-signatures-using-cosign) in
+`Critical.Image.Docker-manifest-digest`, for example,
+`sha256:0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8`.
+
+Search the transparency log with the digest just collected:
+
+```shell
+rekor-cli search --sha sha256:0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8
+```
+
+which results in:
+
+```shell
+Found matching entries (listed by UUID):
+68a53d0e75463d805dc9437dda5815171502475dd704459a5ce3078edba96226
+```
+
+Tekton Chains generates provenance based on the custom [format](https://github.com/tektoncd/chains/blob/main/PROVENANCE_SPEC.md)
+in which the `subject` holds the list of artifacts which were built as part of the release. For the Pipeline release,
+`subject` includes a list of images including pipeline controller, pipeline webhook, etc. Use the `UUID` to get the provenance:
+
+```shell
+rekor-cli get --uuid 68a53d0e75463d805dc9437dda5815171502475dd704459a5ce3078edba96226 --format json | jq -r .Attestation | base64 --decode | jq
+```
+
+which results in:
+
+```shell
+{
+  "_type": "https://in-toto.io/Statement/v0.1",
+  "predicateType": "https://tekton.dev/chains/provenance",
+  "subject": [
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller",
+      "digest": {
+        "sha256": "0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/entrypoint",
+      "digest": {
+        "sha256": "2fa7f7c3408f52ff21b2d8c4271374dac4f5b113b1c4dbc7d5189131e71ce721"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init",
+      "digest": {
+        "sha256": "83d5ec6addece4aac79898c9631ee669f5fee5a710a2ed1f98a6d40c19fb88f7"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/imagedigestexporter",
+      "digest": {
+        "sha256": "e4d77b5b8902270f37812f85feb70d57d6d0e1fed2f3b46f86baf534f19cd9c0"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/kubeconfigwriter",
+      "digest": {
+        "sha256": "55963ed3fb6157e5f8dac7a315a794ebe362e46714631f9c79d79d33fe769e4d"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/nop",
+      "digest": {
+        "sha256": "59b5304bcfdd9834150a2701720cf66e3ebe6d6e4d361ae1612d9430089591f8"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/pullrequest-init",
+      "digest": {
+        "sha256": "4992491b2714a73c0a84553030e6056e6495b3d9d5cc6b20cf7bc8c51be779bb"
+      }
+    },
+    {
+      "name": "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/webhook",
+      "digest": {
+        "sha256": "bf0ef565b301a1981cb2e0d11eb6961c694f6d2401928dccebe7d1e9d8c914de"
+      }
+    }
+  ],
+  ...
+```
+
+Now, verify the digest in the `release.yaml` by matching it with the provenance, for example, the digest for the release `v0.28.1`:
+
+```shell
+curl -s https://storage.googleapis.com/tekton-releases/pipeline/previous/v0.28.1/release.yaml | grep github.com/tektoncd/pipeline/cmd/controller:v0.28.1 | awk -F"github.com/tektoncd/pipeline/cmd/controller:v0.28.1@" '{print $2}'
+```
+
+which results in:
+
+```shell
+sha256:0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8
+```
+
+Now, you can verify the deployment specifications in the `release.yaml` to match each of these images and their digest.
+The `tekton-pipelines-controller` deployment specification has a container named `tekton-pipeline-controller` and a
+list of image references with their digest as part of the `args`:
+
+```yaml
+      containers:
+        - name: tekton-pipelines-controller
+          image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller:v0.28.1@sha256:0c320bc09e91e22ce7f01e47c9f3cb3449749a5f72d5eaecb96e710d999c28e8
+          args: [
+            # These images are built on-demand by `ko resolve` and are replaced
+            # by image references by digest.
+              "-kubeconfig-writer-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/kubeconfigwriter:v0.28.1@sha256:55963ed3fb6157e5f8dac7a315a794ebe362e46714631f9c79d79d33fe769e4d",
+              "-git-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init:v0.28.1@sha256:83d5ec6addece4aac79898c9631ee669f5fee5a710a2ed1f98a6d40c19fb88f7",
+              "-entrypoint-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/entrypoint:v0.28.1@sha256:2fa7f7c3408f52ff21b2d8c4271374dac4f5b113b1c4dbc7d5189131e71ce721",
+              "-nop-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/nop:v0.28.1@sha256:59b5304bcfdd9834150a2701720cf66e3ebe6d6e4d361ae1612d9430089591f8",
+              "-imagedigest-exporter-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/imagedigestexporter:v0.28.1@sha256:e4d77b5b8902270f37812f85feb70d57d6d0e1fed2f3b46f86baf534f19cd9c0",
+              "-pr-image",
+              "gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/pullrequest-init:v0.28.1@sha256:4992491b2714a73c0a84553030e6056e6495b3d9d5cc6b20cf7bc8c51be779bb",
+```
+
+Similarly, you can verify the rest of the images which were published as part of the Tekton Pipelines release:
+
+```shell
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/kubeconfigwriter
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/git-init
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/entrypoint
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/nop
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/imagedigestexporter
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/pullrequest-init
+gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/webhook
+```
 
 ## Next steps
 

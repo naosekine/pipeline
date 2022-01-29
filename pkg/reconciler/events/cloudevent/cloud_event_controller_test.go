@@ -18,16 +18,14 @@ package cloudevent
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	tb "github.com/tektoncd/pipeline/internal/builder/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	resourcev1alpha1 "github.com/tektoncd/pipeline/pkg/apis/resource/v1alpha1"
 	"github.com/tektoncd/pipeline/test/diff"
+	eventstest "github.com/tektoncd/pipeline/test/events"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
@@ -37,6 +35,13 @@ import (
 	"knative.dev/pkg/logging"
 	rtesting "knative.dev/pkg/reconciler/testing"
 )
+
+var now = time.Date(2022, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+type testClock struct{}
+
+func (testClock) Now() time.Time                  { return now }
+func (testClock) Since(t time.Time) time.Duration { return now.Sub(t) }
 
 func TestCloudEventDeliveryFromTargets(t *testing.T) {
 	tests := []struct {
@@ -92,45 +97,138 @@ func TestSendCloudEvents(t *testing.T) {
 		wantTaskRun *v1beta1.TaskRun
 	}{{
 		name: "testWithMultipleMixedCloudEvents",
-		taskRun: tb.TaskRun("test-taskrun-multiple-cloudeventdelivery",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSelfLink("/task/1234"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(
-				tb.StatusCondition(apis.Condition{
-					Type:   apis.ConditionSucceeded,
-					Status: corev1.ConditionUnknown,
-					Reason: "somethingelse",
-				}),
-				tb.TaskRunCloudEvent("http//notattemptedunknown", "", 0, v1beta1.CloudEventConditionUnknown),
-				tb.TaskRunCloudEvent("http//notattemptedfailed", "somehow", 0, v1beta1.CloudEventConditionFailed),
-				tb.TaskRunCloudEvent("http//notattemptedsucceeded", "", 0, v1beta1.CloudEventConditionSent),
-				tb.TaskRunCloudEvent("http//attemptedunknown", "", 1, v1beta1.CloudEventConditionUnknown),
-				tb.TaskRunCloudEvent("http//attemptedfailed", "iknewit", 1, v1beta1.CloudEventConditionFailed),
-				tb.TaskRunCloudEvent("http//attemptedsucceeded", "", 1, v1beta1.CloudEventConditionSent),
-			),
-		),
-		wantTaskRun: tb.TaskRun("test-taskrun-multiple-cloudeventdelivery",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(
-				tb.StatusCondition(apis.Condition{
-					Type:   apis.ConditionSucceeded,
-					Status: corev1.ConditionUnknown,
-					Reason: "somethingelse",
-				}),
-				tb.TaskRunCloudEvent("http//notattemptedunknown", "", 1, v1beta1.CloudEventConditionSent),
-				tb.TaskRunCloudEvent("http//notattemptedfailed", "somehow", 0, v1beta1.CloudEventConditionFailed),
-				tb.TaskRunCloudEvent("http//notattemptedsucceeded", "", 0, v1beta1.CloudEventConditionSent),
-				tb.TaskRunCloudEvent("http//attemptedunknown", "", 1, v1beta1.CloudEventConditionUnknown),
-				tb.TaskRunCloudEvent("http//attemptedfailed", "iknewit", 1, v1beta1.CloudEventConditionFailed),
-				tb.TaskRunCloudEvent("http//attemptedsucceeded", "", 1, v1beta1.CloudEventConditionSent),
-			),
-		),
+		taskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-cloudeventdelivery",
+				Namespace: "foo",
+				SelfLink:  "/task/1234",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{
+				Status: duckv1beta1.Status{
+					Conditions: duckv1beta1.Conditions{apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionUnknown,
+						Reason: "somethingelse",
+					}},
+				},
+				TaskRunStatusFields: v1beta1.TaskRunStatusFields{
+					CloudEvents: []v1beta1.CloudEventDelivery{
+						{
+							Target: "http//notattemptedunknown",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionUnknown,
+							},
+						},
+						{
+							Target: "http//notattemptedfailed",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionFailed,
+								Error:     "somehow",
+							},
+						},
+						{
+							Target: "http//notattemptedsucceeded",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionSent,
+							},
+						},
+						{
+							Target: "http//attemptedunknown",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionUnknown,
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//attemptedfailed",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionFailed,
+								Error:      "iknewit",
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//attemptedsucceeded",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionSent,
+								RetryCount: 1,
+							},
+						},
+					},
+				},
+			},
+		},
+		wantTaskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-cloudeventdelivery",
+				Namespace: "foo",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{
+				Status: duckv1beta1.Status{
+					Conditions: duckv1beta1.Conditions{apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionUnknown,
+						Reason: "somethingelse",
+					}},
+				},
+				TaskRunStatusFields: v1beta1.TaskRunStatusFields{
+					CloudEvents: []v1beta1.CloudEventDelivery{
+						{
+							Target: "http//notattemptedunknown",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionSent,
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//notattemptedfailed",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionFailed,
+								Error:     "somehow",
+							},
+						},
+						{
+							Target: "http//notattemptedsucceeded",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionSent,
+							},
+						},
+						{
+							Target: "http//attemptedunknown",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionUnknown,
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//attemptedfailed",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionFailed,
+								Error:      "iknewit",
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//attemptedsucceeded",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionSent,
+								RetryCount: 1,
+							},
+						},
+					},
+				},
+			},
+		},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,7 +236,7 @@ func TestSendCloudEvents(t *testing.T) {
 			successfulBehaviour := FakeClientBehaviour{
 				SendSuccessfully: true,
 			}
-			err := SendCloudEvents(tc.taskRun, newFakeClient(&successfulBehaviour), logger)
+			err := SendCloudEvents(tc.taskRun, newFakeClient(&successfulBehaviour), logger, testClock{})
 			if err != nil {
 				t.Fatalf("Unexpected error sending cloud events: %v", err)
 			}
@@ -157,38 +255,81 @@ func TestSendCloudEventsErrors(t *testing.T) {
 		wantTaskRun *v1beta1.TaskRun
 	}{{
 		name: "testWithMultipleMixedCloudEvents",
-		taskRun: tb.TaskRun("test-taskrun-multiple-cloudeventdelivery",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSelfLink("/task/1234"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(
-				tb.TaskRunCloudEvent("http//sink1", "", 0, v1beta1.CloudEventConditionUnknown),
-				tb.TaskRunCloudEvent("http//sink2", "", 0, v1beta1.CloudEventConditionUnknown),
-				tb.StatusCondition(apis.Condition{
-					Type:   apis.ConditionSucceeded,
-					Status: corev1.ConditionUnknown,
-					Reason: "somethingelse",
-				}),
-			),
-		),
-		wantTaskRun: tb.TaskRun("test-taskrun-multiple-cloudeventdelivery",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(
-				// Error message is not checked in the Diff below
-				tb.TaskRunCloudEvent("http//sink1", "", 1, v1beta1.CloudEventConditionFailed),
-				tb.TaskRunCloudEvent("http//sink2", "", 1, v1beta1.CloudEventConditionFailed),
-				tb.StatusCondition(apis.Condition{
-					Type:   apis.ConditionSucceeded,
-					Status: corev1.ConditionUnknown,
-					Reason: "somethingelse",
-				}),
-			),
-		),
+		taskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-cloudeventdelivery",
+				Namespace: "foo",
+				SelfLink:  "/task/1234",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{
+				Status: duckv1beta1.Status{
+					Conditions: duckv1beta1.Conditions{apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionUnknown,
+						Reason: "somethingelse",
+					}},
+				},
+				TaskRunStatusFields: v1beta1.TaskRunStatusFields{
+					CloudEvents: []v1beta1.CloudEventDelivery{
+						{
+							Target: "http//sink1",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionUnknown,
+							},
+						},
+						{
+							Target: "http//sink2",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionUnknown,
+							},
+						},
+					},
+				},
+			},
+		},
+		wantTaskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-cloudeventdelivery",
+				Namespace: "foo",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{
+				Status: duckv1beta1.Status{
+					Conditions: duckv1beta1.Conditions{apis.Condition{
+						Type:   apis.ConditionSucceeded,
+						Status: corev1.ConditionUnknown,
+						Reason: "somethingelse",
+					}},
+				},
+				TaskRunStatusFields: v1beta1.TaskRunStatusFields{
+					CloudEvents: []v1beta1.CloudEventDelivery{
+						{
+							Target: "http//sink1",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionFailed,
+								RetryCount: 1,
+							},
+						},
+						{
+							Target: "http//sink2",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition:  v1beta1.CloudEventConditionFailed,
+								RetryCount: 1,
+							},
+						},
+					},
+				},
+			},
+		},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,7 +337,7 @@ func TestSendCloudEventsErrors(t *testing.T) {
 			unsuccessfulBehaviour := FakeClientBehaviour{
 				SendSuccessfully: false,
 			}
-			err := SendCloudEvents(tc.taskRun, newFakeClient(&unsuccessfulBehaviour), logger)
+			err := SendCloudEvents(tc.taskRun, newFakeClient(&unsuccessfulBehaviour), logger, testClock{})
 			if err == nil {
 				t.Fatalf("Unexpected success sending cloud events: %v", err)
 			}
@@ -216,67 +357,179 @@ func TestInitializeCloudEvents(t *testing.T) {
 		wantTaskRun       *v1beta1.TaskRun
 	}{{
 		name: "testWithMultipleMixedResources",
-		taskRun: tb.TaskRun("test-taskrun-multiple-mixed-resources",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSelfLink("/task/1234"), tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-				tb.TaskRunResources(
-					tb.TaskRunResourcesOutput("ce1", tb.TaskResourceBindingRef("ce1")),
-					tb.TaskRunResourcesOutput("git", tb.TaskResourceBindingRef("git")),
-					tb.TaskRunResourcesOutput("ce2", tb.TaskResourceBindingRef("ce2")),
-				),
-			),
-		),
-		pipelineResources: []*resourcev1alpha1.PipelineResource{
-			tb.PipelineResource("ce1", tb.PipelineResourceNamespace("foo"), tb.PipelineResourceSpec(
-				resourcev1alpha1.PipelineResourceTypeCloudEvent,
-				tb.PipelineResourceSpecParam("TargetURI", "http://foosink"),
-			)),
-			tb.PipelineResource("ce2", tb.PipelineResourceNamespace("foo"), tb.PipelineResourceSpec(
-				resourcev1alpha1.PipelineResourceTypeCloudEvent,
-				tb.PipelineResourceSpecParam("TargetURI", "http://barsink"),
-			)),
-			tb.PipelineResource("git", tb.PipelineResourceNamespace("foo"), tb.PipelineResourceSpec(
-				resourcev1alpha1.PipelineResourceTypeGit,
-				tb.PipelineResourceSpecParam("URL", "http://git.fake"),
-				tb.PipelineResourceSpecParam("Revision", "abcd"),
-			)),
+		taskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-mixed-resources",
+				Namespace: "foo",
+				SelfLink:  "/task/1234",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+				Resources: &v1beta1.TaskRunResources{
+					Outputs: []v1beta1.TaskResourceBinding{
+						{
+							PipelineResourceBinding: v1beta1.PipelineResourceBinding{
+								Name: "ce1",
+								ResourceRef: &v1beta1.PipelineResourceRef{
+									Name: "ce1",
+								},
+							},
+						},
+						{
+							PipelineResourceBinding: v1beta1.PipelineResourceBinding{
+								Name: "git",
+								ResourceRef: &v1beta1.PipelineResourceRef{
+									Name: "git",
+								},
+							},
+						},
+						{
+							PipelineResourceBinding: v1beta1.PipelineResourceBinding{
+								Name: "ce2",
+								ResourceRef: &v1beta1.PipelineResourceRef{
+									Name: "ce2",
+								},
+							},
+						},
+					},
+				},
+			},
 		},
-		wantTaskRun: tb.TaskRun("test-taskrun-multiple-mixed-resources",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(
-				tb.TaskRunCloudEvent("http://barsink", "", 0, v1beta1.CloudEventConditionUnknown),
-				tb.TaskRunCloudEvent("http://foosink", "", 0, v1beta1.CloudEventConditionUnknown),
-			),
-		),
+		pipelineResources: []*resourcev1alpha1.PipelineResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ce1",
+					Namespace: "foo",
+				},
+				Spec: resourcev1alpha1.PipelineResourceSpec{
+					Type: resourcev1alpha1.PipelineResourceTypeCloudEvent,
+					Params: []resourcev1alpha1.ResourceParam{{
+						Name:  "TargetURI",
+						Value: "http://foosink",
+					}},
+				},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ce2",
+					Namespace: "foo",
+				},
+				Spec: resourcev1alpha1.PipelineResourceSpec{
+					Type: resourcev1alpha1.PipelineResourceTypeCloudEvent,
+					Params: []resourcev1alpha1.ResourceParam{{
+						Name:  "TargetURI",
+						Value: "http://barsink",
+					}},
+				},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "git",
+					Namespace: "foo",
+				},
+				Spec: resourcev1alpha1.PipelineResourceSpec{
+					Type: resourcev1alpha1.PipelineResourceTypeGit,
+					Params: []resourcev1alpha1.ResourceParam{
+						{
+							Name:  "URL",
+							Value: "http://git.fake",
+						},
+						{
+							Name:  "Revision",
+							Value: "abcd",
+						},
+					},
+				},
+			},
+		},
+		wantTaskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-multiple-mixed-resources",
+				Namespace: "foo",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{
+				TaskRunStatusFields: v1beta1.TaskRunStatusFields{
+					CloudEvents: []v1beta1.CloudEventDelivery{
+						{
+							Target: "http://barsink",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionUnknown,
+							},
+						},
+						{
+							Target: "http://foosink",
+							Status: v1beta1.CloudEventDeliveryState{
+								Condition: v1beta1.CloudEventConditionUnknown,
+							},
+						},
+					},
+				},
+			},
+		},
 	}, {
 		name: "testWithNoCloudEventResources",
-		taskRun: tb.TaskRun("test-taskrun-no-cloudevent-resources",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSelfLink("/task/1234"), tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-				tb.TaskRunResources(
-					tb.TaskRunResourcesOutput("git", tb.TaskResourceBindingRef("git")),
-				),
-			),
-		),
-		pipelineResources: []*resourcev1alpha1.PipelineResource{
-			tb.PipelineResource("git", tb.PipelineResourceNamespace("foo"), tb.PipelineResourceSpec(
-				resourcev1alpha1.PipelineResourceTypeGit,
-				tb.PipelineResourceSpecParam("URL", "http://git.fake"),
-				tb.PipelineResourceSpecParam("Revision", "abcd"),
-			)),
+		taskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-no-cloudevent-resources",
+				Namespace: "foo",
+				SelfLink:  "/task/1234",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+				Resources: &v1beta1.TaskRunResources{
+					Outputs: []v1beta1.TaskResourceBinding{{
+						PipelineResourceBinding: v1beta1.PipelineResourceBinding{
+							Name: "git",
+							ResourceRef: &v1beta1.PipelineResourceRef{
+								Name: "git",
+							},
+						},
+					}},
+				},
+			},
 		},
-		wantTaskRun: tb.TaskRun("test-taskrun-no-cloudevent-resources",
-			tb.TaskRunNamespace("foo"),
-			tb.TaskRunSpec(
-				tb.TaskRunTaskRef("fakeTaskName"),
-			),
-			tb.TaskRunStatus(),
-		),
+		pipelineResources: []*resourcev1alpha1.PipelineResource{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "git",
+					Namespace: "foo",
+				},
+				Spec: resourcev1alpha1.PipelineResourceSpec{
+					Type: resourcev1alpha1.PipelineResourceTypeGit,
+					Params: []resourcev1alpha1.ResourceParam{
+						{
+							Name:  "URL",
+							Value: "http://git.fake",
+						},
+						{
+							Name:  "Revision",
+							Value: "abcd",
+						},
+					},
+				},
+			},
+		},
+		wantTaskRun: &v1beta1.TaskRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-taskrun-no-cloudevent-resources",
+				Namespace: "foo",
+			},
+			Spec: v1beta1.TaskRunSpec{
+				TaskRef: &v1beta1.TaskRef{
+					Name: "fakeTaskName",
+				},
+			},
+			Status: v1beta1.TaskRunStatus{},
+		},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -306,8 +559,8 @@ func TestSendCloudEventWithRetries(t *testing.T) {
 		name            string
 		clientBehaviour FakeClientBehaviour
 		object          objectWithCondition
-		wantCEvent      string
-		wantEvent       string
+		wantCEvents     []string
+		wantEvents      []string
 	}{{
 		name: "test-send-cloud-event-taskrun",
 		clientBehaviour: FakeClientBehaviour{
@@ -319,8 +572,8 @@ func TestSendCloudEventWithRetries(t *testing.T) {
 			},
 			Status: v1beta1.TaskRunStatus{Status: objectStatus},
 		},
-		wantCEvent: "Context Attributes,",
-		wantEvent:  "",
+		wantCEvents: []string{"Context Attributes,"},
+		wantEvents:  []string{},
 	}, {
 		name: "test-send-cloud-event-pipelinerun",
 		clientBehaviour: FakeClientBehaviour{
@@ -332,8 +585,8 @@ func TestSendCloudEventWithRetries(t *testing.T) {
 			},
 			Status: v1beta1.PipelineRunStatus{Status: objectStatus},
 		},
-		wantCEvent: "Context Attributes,",
-		wantEvent:  "",
+		wantCEvents: []string{"Context Attributes,"},
+		wantEvents:  []string{},
 	}, {
 		name: "test-send-cloud-event-failed",
 		clientBehaviour: FakeClientBehaviour{
@@ -342,8 +595,8 @@ func TestSendCloudEventWithRetries(t *testing.T) {
 		object: &v1beta1.PipelineRun{
 			Status: v1beta1.PipelineRunStatus{Status: objectStatus},
 		},
-		wantCEvent: "",
-		wantEvent:  "Warning Cloud Event Failure",
+		wantCEvents: []string{},
+		wantEvents:  []string{"Warning Cloud Event Failure"},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,11 +607,11 @@ func TestSendCloudEventWithRetries(t *testing.T) {
 				t.Fatalf("Unexpected error sending cloud events: %v", err)
 			}
 			ceClient := Get(ctx).(FakeClient)
-			if err := checkCloudEvents(t, &ceClient, tc.name, tc.wantCEvent); err != nil {
+			if err := eventstest.CheckEventsUnordered(t, ceClient.Events, tc.name, tc.wantCEvents); err != nil {
 				t.Fatalf(err.Error())
 			}
 			recorder := controller.GetEventRecorder(ctx).(*record.FakeRecorder)
-			if err := checkEvents(t, recorder, tc.name, tc.wantEvent); err != nil {
+			if err := eventstest.CheckEventsOrdered(t, recorder.Events, tc.name, tc.wantEvents); err != nil {
 				t.Fatalf(err.Error())
 			}
 		})
@@ -421,32 +674,4 @@ func setupFakeContext(t *testing.T, behaviour FakeClientBehaviour, withClient bo
 		ctx = WithClient(ctx, &behaviour)
 	}
 	return ctx
-}
-
-func eventFromChannel(c chan string, testName string, wantEvent string) error {
-	timer := time.NewTimer(10 * time.Millisecond)
-	select {
-	case event := <-c:
-		if wantEvent == "" {
-			return fmt.Errorf("received event \"%s\" for %s but none expected", event, testName)
-		}
-		if !(strings.HasPrefix(event, wantEvent)) {
-			return fmt.Errorf("expected event \"%s\" but got \"%s\" instead for %s", wantEvent, event, testName)
-		}
-	case <-timer.C:
-		if wantEvent != "" {
-			return fmt.Errorf("received no events for %s but %s expected", testName, wantEvent)
-		}
-	}
-	return nil
-}
-
-func checkEvents(t *testing.T, fr *record.FakeRecorder, testName string, wantEvent string) error {
-	t.Helper()
-	return eventFromChannel(fr.Events, testName, wantEvent)
-}
-
-func checkCloudEvents(t *testing.T, fce *FakeClient, testName string, wantEvent string) error {
-	t.Helper()
-	return eventFromChannel(fce.Events, testName, wantEvent)
 }

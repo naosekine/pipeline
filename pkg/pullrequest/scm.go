@@ -32,6 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// NewSCMHandler returns a new Handler  for the given URL, provider and token
 func NewSCMHandler(logger *zap.SugaredLogger, raw, provider, token string, skipTLSVerify bool) (*Handler, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -101,7 +102,8 @@ func githubHandlerFromURL(u *url.URL, token string, skipTLSVerify bool, logger *
 	// gosec complains that we're setting the InsecureSkipVerify option to bypass
 	// security checks. As long as this is generally set to false (which is the
 	// case by default), this should be fine.
-	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: skipTLSVerify} // nolint: gosec
+	// #nosec G402
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: skipTLSVerify}
 
 	if token != "" {
 		ts := oauth2.StaticTokenSource(
@@ -156,7 +158,8 @@ func gitlabHandlerFromURL(u *url.URL, token string, skipTLSVerify bool, logger *
 	}
 
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: skipTLSVerify} // nolint: gosec
+	// #nosec G402
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: skipTLSVerify}
 
 	if token != "" {
 		client.Client = &http.Client{
@@ -180,6 +183,7 @@ type gitlabClient struct {
 	transport http.RoundTripper
 }
 
+// RoundTrip handles authentication for the gitlabClient
 func (g *gitlabClient) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Add("Private-Token", g.token)
 	return g.transport.RoundTrip(r)

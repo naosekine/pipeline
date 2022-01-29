@@ -24,6 +24,7 @@ import (
 
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/clock"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun"
 	corev1 "k8s.io/api/core/v1"
@@ -57,8 +58,7 @@ func main() {
 	flag.StringVar(&opts.Images.GsutilImage, "gsutil-image", "", "The container image containing gsutil")
 	flag.StringVar(&opts.Images.PRImage, "pr-image", "", "The container image containing our PR binary.")
 	flag.StringVar(&opts.Images.ImageDigestExporterImage, "imagedigest-exporter-image", "", "The container image containing our image digest exporter binary.")
-	flag.BoolVar(&opts.ExperimentalDisableResolution, "experimental-disable-in-tree-resolution", false,
-		"Disable resolution of taskrun and pipelinerun refs by the taskrun and pipelinerun reconcilers.")
+	flag.StringVar(&opts.Images.WorkingDirInitImage, "workingdirinit-image", "", "The container image containing our working dir init binary.")
 
 	// This parses flags.
 	cfg := injection.ParseAndGetRESTConfigOrDie()
@@ -102,8 +102,8 @@ func main() {
 
 	ctx = filteredinformerfactory.WithSelectors(ctx, v1beta1.ManagedByLabelKey)
 	sharedmain.MainWithConfig(ctx, ControllerLogKey, cfg,
-		taskrun.NewController(opts),
-		pipelinerun.NewController(opts),
+		taskrun.NewController(opts, clock.RealClock{}),
+		pipelinerun.NewController(opts, clock.RealClock{}),
 	)
 }
 

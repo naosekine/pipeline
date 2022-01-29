@@ -25,7 +25,8 @@ import (
 	"testing"
 	"time"
 
-	tb "github.com/tektoncd/pipeline/internal/builder/v1alpha1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,18 +48,37 @@ func TestPipelineRunTimeout(t *testing.T) {
 	defer tearDown(context.Background(), t, c, namespace)
 
 	t.Logf("Creating Task in namespace %s", namespace)
-	task := tb.Task(helpers.ObjectNameForTest(t), tb.TaskSpec(
-		tb.Step("busybox", tb.StepCommand("/bin/sh"), tb.StepArgs("-c", "sleep 10"))))
+	task := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: busybox
+    command: ['/bin/sh']
+    args: ['-c', 'sleep 10']
+`, helpers.ObjectNameForTest(t)))
+
 	if _, err := c.TaskClient.Create(ctx, task, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task %q: %s", task.Name, err)
 	}
 
-	pipeline := tb.Pipeline(helpers.ObjectNameForTest(t),
-		tb.PipelineSpec(tb.PipelineTask("foo", task.Name)),
-	)
-	pipelineRun := tb.PipelineRun(helpers.ObjectNameForTest(t), tb.PipelineRunSpec(pipeline.Name,
-		tb.PipelineRunTimeout(5*time.Second),
-	))
+	pipeline := parse.MustParseAlphaPipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  tasks:
+  - name: foo
+    taskRef:
+      name: %s
+`, helpers.ObjectNameForTest(t), task.Name))
+	pipelineRun := parse.MustParseAlphaPipelineRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  pipelineRef:
+    name: %s
+  timeout: 5s
+`, helpers.ObjectNameForTest(t), pipeline.Name))
 	if _, err := c.PipelineClient.Create(ctx, pipeline, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline `%s`: %s", pipeline.Name, err)
 	}
@@ -122,9 +142,22 @@ func TestPipelineRunTimeout(t *testing.T) {
 
 	// Verify that we can create a second Pipeline using the same Task without a Pipeline-level timeout that will not
 	// time out
-	secondPipeline := tb.Pipeline(helpers.ObjectNameForTest(t),
-		tb.PipelineSpec(tb.PipelineTask("foo", task.Name)))
-	secondPipelineRun := tb.PipelineRun(helpers.ObjectNameForTest(t), tb.PipelineRunSpec(secondPipeline.Name))
+	secondPipeline := parse.MustParseAlphaPipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  tasks:
+  - name: foo
+    taskRef:
+      name: %s
+`, helpers.ObjectNameForTest(t), task.Name))
+	secondPipelineRun := parse.MustParseAlphaPipelineRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  pipelineRef:
+    name: %s
+`, helpers.ObjectNameForTest(t), secondPipeline.Name))
 	if _, err := c.PipelineClient.Create(ctx, secondPipeline, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline `%s`: %s", secondPipeline.Name, err)
 	}
@@ -141,7 +174,9 @@ func TestPipelineRunTimeout(t *testing.T) {
 // TestTaskRunTimeout is an integration test that will verify a TaskRun can be timed out.
 func TestTaskRunTimeout(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout+2*time.Minute)
+	taskTimeout := 1 * time.Second
+	testTimeout := taskTimeout + (2 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 	c, namespace := setup(ctx, t)
 
@@ -149,16 +184,28 @@ func TestTaskRunTimeout(t *testing.T) {
 	defer tearDown(context.Background(), t, c, namespace)
 
 	t.Logf("Creating Task and TaskRun in namespace %s", namespace)
-	task := tb.Task(helpers.ObjectNameForTest(t),
-		tb.TaskSpec(tb.Step("busybox", tb.StepCommand("/bin/sh"), tb.StepArgs("-c", "sleep 3000"))))
+	task := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: busybox
+    command: ['/bin/sh']
+    args: ['-c', 'sleep 3000']
+`, helpers.ObjectNameForTest(t)))
 	if _, err := c.TaskClient.Create(ctx, task, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", task.Name, err)
 	}
 
-	taskRun := tb.TaskRun(helpers.ObjectNameForTest(t), tb.TaskRunSpec(tb.TaskRunTaskRef(task.Name),
-		// Do not reduce this timeout. Taskrun e2e test is also verifying
-		// if reconcile is triggered from timeout handler and not by pod informers
-		tb.TaskRunTimeout(30*time.Second)))
+	taskRun := parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  taskRef:
+    name: %s
+  timeout: %s
+`, helpers.ObjectNameForTest(t), namespace, task.Name, taskTimeout))
 	if _, err := c.TaskRunClient.Create(ctx, taskRun, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create TaskRun `%s`: %s", taskRun.Name, err)
 	}
@@ -179,11 +226,24 @@ func TestPipelineTaskTimeout(t *testing.T) {
 	defer tearDown(context.Background(), t, c, namespace)
 
 	t.Logf("Creating Tasks in namespace %s", namespace)
-	task1 := tb.Task(helpers.ObjectNameForTest(t), tb.TaskSpec(
-		tb.Step("busybox", tb.StepCommand("sleep"), tb.StepArgs("1s"))))
-
-	task2 := tb.Task(helpers.ObjectNameForTest(t), tb.TaskSpec(
-		tb.Step("busybox", tb.StepCommand("sleep"), tb.StepArgs("10s"))))
+	task1 := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: busybox
+    command: ['/bin/sh']
+    args: ['-c', 'sleep 1s']
+`, helpers.ObjectNameForTest(t)))
+	task2 := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: busybox
+    command: ['/bin/sh']
+    args: ['-c', 'sleep 10s']
+`, helpers.ObjectNameForTest(t)))
 
 	if _, err := c.TaskClient.Create(ctx, task1, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", task1.Name, err)
@@ -192,14 +252,27 @@ func TestPipelineTaskTimeout(t *testing.T) {
 		t.Fatalf("Failed to create Task `%s`: %s", task2.Name, err)
 	}
 
-	pipeline := tb.Pipeline(helpers.ObjectNameForTest(t),
-		tb.PipelineSpec(
-			tb.PipelineTask("pipelinetask1", task1.Name, tb.PipelineTaskTimeout(60*time.Second)),
-			tb.PipelineTask("pipelinetask2", task2.Name, tb.PipelineTaskTimeout(5*time.Second)),
-		),
-	)
-
-	pipelineRun := tb.PipelineRun(helpers.ObjectNameForTest(t), tb.PipelineRunSpec(pipeline.Name))
+	pipeline := parse.MustParseAlphaPipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  tasks:
+  - name: pipelinetask1
+    taskRef:
+      name: %s
+    timeout: 60s
+  - name: pipelinetask2
+    taskRef:
+      name: %s
+    timeout: 5s
+`, helpers.ObjectNameForTest(t), task1.Name, task2.Name))
+	pipelineRun := parse.MustParseAlphaPipelineRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  pipelineRef:
+    name: %s
+`, helpers.ObjectNameForTest(t), pipeline.Name))
 
 	if _, err := c.PipelineClient.Create(ctx, pipeline, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline `%s`: %s", pipeline.Name, err)

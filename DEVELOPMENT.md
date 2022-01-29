@@ -4,7 +4,7 @@
 
 First, you may want to [Ramp up](#ramp-up) on Kubernetes and Custom Resource Definitions (CRDs) as Tekton implements several Kubernetes resource controllers configured by Tekton CRDs. Then follow these steps to start developing and contributing project code:
 
-1. [Setting up a development environment](#setting-up-a-environment-setup)
+1. [Setting up a development environment](#setting-up-a-development-environment)
     1. [Setup a GitHub account accessible via SSH](#setup-a-github-account-accessible-via-ssh)
     1. [Install tools](#install-tools)
     1. [Configure environment](#configure-environment)
@@ -15,7 +15,7 @@ First, you may want to [Ramp up](#ramp-up) on Kubernetes and Custom Resource Def
     1. [Configure kubectl to use your cluster](https://kubernetes.io/docs/tasks/access-application-cluster/configure-access-multiple-clusters/)
     1. [Set up a docker repository 'ko' can push images to](https://github.com/knative/serving/blob/4a8c859741a4454bdd62c2b60069b7d05f5468e7/docs/setting-up-a-docker-registry.md)
 1. [Developing and testing](#developing-and-testing) Tekton pipelines
-    1. Learn how to [iterate](#iterating) on code changes
+    1. Learn how to [iterate](#iterating-on-code-changes) on code changes
     1. [Managing Tekton Objects using `ko`](#managing-tekton-objects-using-ko) in Kubernetes
     1. [Standing up a K8s cluster with Tekton using the kind tool](#standing-up-a-k8s-cluster-with-tekton-using-the-kind-tool)
     1. [Accessing logs](#accessing-logs)
@@ -92,6 +92,10 @@ You must install these tools:
     --clusterrole=cluster-admin \
     --user="${USER}"
     ```
+
+1. [`bash`](https://www.gnu.org/software/bash/) v4 or higher: For scripts used to
+   generate code and update dependencies. On MacOS the default bash is too old,
+   you can use [Homebrew](https://brew.sh) to install a later version.
 
 ### Configure environment
 
@@ -184,7 +188,6 @@ Depending on your chosen container registry that you set in the `KO_DOCKER_REPO`
 Docker Desktop provides seamless integration with both a local (default) image registry as well as Docker Hub remote registries.  To use Docker Hub registries with `ko`, all you need do is to configure Docker Desktop with your Docker ID and password in its dashboard.
 
 #### Using Google Container Registry (GCR)
-
 If using GCR with `ko`, make sure to configure
 [authentication](https://cloud.google.com/container-registry/docs/advanced-authentication#standalone_docker_credential_helper)
 for your `KO_DOCKER_REPO` if required. To be able to push images to
@@ -193,31 +196,38 @@ for your `KO_DOCKER_REPO` if required. To be able to push images to
 ```shell
 gcloud auth configure-docker
 ```
+The [example GKE setup](#using-gke) in this guide grants service accounts permissions to push and pull GCR images in the same project.
+If you choose to use a different setup with fewer default permissions, or your GKE cluster that will run Tekton
+is in a different project than your GCR registry, you will need to provide the Tekton pipelines
+controller and webhook service accounts with GCR credentials.
+See documentation on [using GCR with GKE](https://cloud.google.com/container-registry/docs/using-with-google-cloud-platform#gke)
+for more information.
+To do this, create a secret for your docker credentials and reference this secret from the controller and webhook service accounts,
+as follows.
 
-Besides, if your registry `KO_DOCKER_REPO` is private, then you also should create a [secret](https://kubernetes.io/docs/concepts/configuration/secret/#docker-config-secrets)
-and add it to `tekton-pipelines-controller` and `tekton-pipelines-webhook` ServiceAccounts accordingly to pull images.
-
-1. Create a secret
+1. Create a secret, for example:
 
     ```yaml
-    kubectl create secret docker-registry ${SECRET_NAME} \
-    --docker-username=${USERNAME} \
-    --docker-password=${PASSWORD} \
-    --docker-email=me@here.com \
+    kubectl create secret generic ${SECRET_NAME} \
+    --from-file=.dockerconfigjson=<path/to/.docker/config.json> \
+    --type=kubernetes.io/dockerconfigjson
     --namespace=tekton-pipelines
     ```
+   See [Configuring authentication for Docker](./docs/auth.md#configuring-authentication-for-docker)
+   for more detailed information on creating secrets containing registry credentials.
 
-2. Add the `secret` to the K8s `ServiceAccount` configuration file
-
-    Before using `ko` to deploy `tekton-pipelines`, you need to change [the contents of the ServiceAccount](./config/200-serviceaccount.yaml) configuration file as shown below:
+2. Update the `tekton-pipelines-controller` and `tekton-pipelines-webhook` service accounts
+    to reference the newly created secret by modifying
+    the [definitions of these service accounts](./config/200-serviceaccount.yaml)
+    as shown below.
 
     ```yaml
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-    name: tekton-pipelines-controller
-    namespace: tekton-pipelines
-    labels:
+      name: tekton-pipelines-controller
+      namespace: tekton-pipelines
+      labels:
         app.kubernetes.io/component: controller
         app.kubernetes.io/instance: default
         app.kubernetes.io/part-of: tekton-pipelines
@@ -227,9 +237,9 @@ and add it to `tekton-pipelines-controller` and `tekton-pipelines-webhook` Servi
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-    name: tekton-pipelines-webhook
-    namespace: tekton-pipelines
-    labels:
+      name: tekton-pipelines-webhook
+      namespace: tekton-pipelines
+      labels:
         app.kubernetes.io/component: webhook
         app.kubernetes.io/instance: default
         app.kubernetes.io/part-of: tekton-pipelines
@@ -245,10 +255,31 @@ and add it to `tekton-pipelines-controller` and `tekton-pipelines-webhook` Servi
 
 The recommended minimum development configuration is:
 
-- Kubernetes version 1.18 or later
+- Kubernetes version 1.20 or later
 - 4 (virtual) CPU nodes
   - 8 GB of (actual or virtualized) platform memory
 - Node autoscaling, up to 3 nodes
+
+#### Using [KinD](https://kind.sigs.k8s.io/)
+
+[KinD](https://kind.sigs.k8s.io/) is a great tool for working with Kubernetes clusters locally. It is particularly useful to quickly test code against different cluster [configurations](https://kind.sigs.k8s.io/docs/user/quick-start/#advanced).
+
+1. Install [required tools](./DEVELOPMENT.md#install-tools) (note: may require a newer version of Go).
+2. Install [Docker](https://www.docker.com/get-started).
+3. Create cluster:
+   
+   ```sh
+   $ kind create cluster
+   ```
+
+4. Configure [ko](https://kind.sigs.k8s.io/):
+   
+   ```sh
+   $ export KO_DOCKER_REPO="kind.local"
+   $ export KIND_CLUSTER_NAME="kind"  # only needed if you used a custom name in the previous step
+   ```
+
+optional: As a convenience, the [Tekton plumbing project](https://github.com/tektoncd/plumbing) provides a script named ['tekton_in_kind.sh'](https://github.com/tektoncd/plumbing/tree/main/hack#tekton_in_kindsh) that leverages `kind` to create a cluster and install Tekton Pipeline, [Tekton Triggers](https://github.com/tektoncd/triggers) and [Tekton Dashboard](https://github.com/tektoncd/dashboard) components into it.
 
 #### Using MiniKube
 
@@ -260,8 +291,8 @@ The recommended minimum development configuration is:
 
 #### Using GKE
 
-1. [Install required tools and setup GCP project](https://knative.dev/v0.12-docs/install/knative-with-gke/)
-    (You may find it useful to save the ID of the project in an environment
+1. [Set up a GCP Project](https://cloud.google.com/resource-manager/docs/creating-managing-projects) and [enable the GKE API](https://cloud.google.com/kubernetes-engine/docs/quickstart#before-you-begin). 
+    You may find it useful to save the ID of the project in an environment
     variable (e.g. `PROJECT_ID`).
 
 <!-- TODO: Someone needs to validate the cluster-version-->
@@ -277,14 +308,13 @@ The recommended minimum development configuration is:
      --min-nodes=1 \
      --max-nodes=3 \
      --scopes=cloud-platform \
-     --enable-basic-auth \
      --no-issue-client-certificate \
      --project=$PROJECT_ID \
      --region=us-central1 \
      --machine-type=n1-standard-4 \
      --image-type=cos \
      --num-nodes=1 \
-     --cluster-version=1.18
+     --cluster-version=1.20
     ```
 
     > **Note**: The recommended [GCE machine type](https://cloud.google.com/compute/docs/machine-types) is `'n1-standard-4'`.
@@ -339,7 +369,7 @@ ko apply -f config/
 
 #### Verify installation
 
-You can verify your development installation using `ko` was successful by checking to see oif the Tekton pipeline pods are running in Kubernetes:
+You can verify your development installation using `ko` was successful by checking to see if the Tekton pipeline pods are running in Kubernetes:
 
 ```shell
 kubectl get pods -n tekton-pipelines
@@ -388,59 +418,6 @@ This script will cause `ko` to:
 
 It will also update the default system namespace used for K8s `deployments` to the new value for all subsequent `kubectl` commands.
 
----
-
-### Standing up a K8s cluster with Tekton using the `kind` tool
-
-An alternative to standing up your own K8s cluster and installing Tekton using `ko` is by using the [kind](https://kind.sigs.k8s.io/) tool. It was designed to help create and run local Kubernetes clusters in Docker to assist in local development and testing.
-
-The [Tekton "plumbing" project](https://github.com/tektoncd/plumbing) provides a convenience script, named ['tekton_in_kind.sh'](https://github.com/tektoncd/plumbing/blob/main/hack/tekton_in_kind.sh), that leverages `kind` to create a cluster and then deploy Tekton Pipeline, [Tekton Triggers](https://github.com/tektoncd/triggers) and [Tekton Dashboard](https://github.com/tektoncd/dashboard) components into it.
-
-See Tekton Plumbing's [DEVELOPMENT.md](https://github.com/tektoncd/plumbing/blob/main/DEVELOPMENT.md) for more details on this and other helpful scripts and tools.
-
-#### Installation and prerequisites
-
-- Clone the [Tekton Plumbing](https://github.com/tektoncd/plumbing) repository which has the ['tekton_in_kind.sh'](https://github.com/tektoncd/plumbing/blob/main/hack/tekton_in_kind.sh) and other helpful scripts.
-- `kind`: Install using its ["quick start"](https://kind.sigs.k8s.io/docs/user/quick-start/) documentation.
-- `Docker`: `kind` also requires Docker to be installed and running locally. Use the [Get Docker](https://docs.docker.com/get-docker/) instructions.
-
-#### Create a cluster with Tekton components
-
-Change into the Tekton plumbing repository you cloned and invoke the script:
-
-```shell
-cd plumbing
-./hack/tekton_in_kind.sh
-```
-
-The script, after using `kind` to create the K8s cluster, uses `kubectl` to install the `latest` released versions of Tekton components. After successful completion, the script will have:
-
-- Created a K8s cluster named `tekton`
-- Created a `cluster-context` for `kubectl` named `'kind-tekton'` and set it as the `current-context`
-- Deployed the latest Tekton Pipeline, Trigger and Dashboard components
-- Made Tekton Dashboard available at `http://localhost:9097`
-
-After the Tekton components are installed using this script, you can than use the `ko` tool to build and apply your development changes to the cluster for testing.
-
-##### Using a different cluster name and Tekton versions
-
-You can also specify a different cluster name and released versions of components you want installed:
-
-```shell
-# Script usage:
-tekton_in_kind.sh [-c cluster-name -p pipeline-version -t triggers-version -d dashboard-version]"
-```
-
-#### Delete the cluster
-
-If you wish to delete the cluster that the script created, use the following command:
-
-```shell
-# Delete the cluster using the default name
-kind delete cluster --name tekton
-```
-
-> **Note**: Be sure to set a `kubectl` context, as its unset as a side-effect of the delete (i.e., `kubectl config use-context`*`<context-name>`*).
 
 ---
 

@@ -20,10 +20,12 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
-	tb "github.com/tektoncd/pipeline/internal/builder/v1alpha1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	knativetest "knative.dev/pkg/test"
@@ -44,17 +46,28 @@ func TestWorkingDirCreated(t *testing.T) {
 	knativetest.CleanupOnInterrupt(func() { tearDown(ctx, t, c, namespace) }, t.Logf)
 	defer tearDown(ctx, t, c, namespace)
 
-	task := tb.Task(wdTaskName, tb.TaskSpec(
-		tb.Step("ubuntu", tb.StepWorkingDir("/workspace/HELLOMOTO"), tb.StepArgs("-c", "echo YES")),
-	))
+	task := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: ubuntu
+    workingDir: /workspace/HELLOMOTO
+    args: ['-c', 'echo YES']
+`, wdTaskName))
 	if _, err := c.TaskClient.Create(ctx, task, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task: %s", err)
 	}
 
 	t.Logf("Creating TaskRun  namespace %s", namespace)
-	taskRun := tb.TaskRun(wdTaskRunName, tb.TaskRunSpec(
-		tb.TaskRunTaskRef(wdTaskName), tb.TaskRunServiceAccountName("default"),
-	))
+	taskRun := parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  taskRef:
+    name: %s
+  serviceAccountName: default
+`, wdTaskRunName, wdTaskName))
 	if _, err := c.TaskRunClient.Create(ctx, taskRun, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create TaskRun: %s", err)
 	}
@@ -101,17 +114,28 @@ func TestWorkingDirIgnoredNonSlashWorkspace(t *testing.T) {
 	knativetest.CleanupOnInterrupt(func() { tearDown(ctx, t, c, namespace) }, t.Logf)
 	defer tearDown(ctx, t, c, namespace)
 
-	task := tb.Task(wdTaskName, tb.TaskSpec(
-		tb.Step("ubuntu", tb.StepWorkingDir("/HELLOMOTO"), tb.StepArgs("-c", "echo YES")),
-	))
+	task := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  steps:
+  - image: ubuntu
+    workingDir: /HELLOMOTO
+    args: ['-c', 'echo YES']
+`, wdTaskName))
 	if _, err := c.TaskClient.Create(ctx, task, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task: %s", err)
 	}
 
 	t.Logf("Creating TaskRun  namespace %s", namespace)
-	taskRun := tb.TaskRun(wdTaskRunName, tb.TaskRunSpec(
-		tb.TaskRunTaskRef(wdTaskName), tb.TaskRunServiceAccountName("default"),
-	))
+	taskRun := parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  taskRef:
+    name: %s
+  serviceAccountName: default
+`, wdTaskRunName, wdTaskName))
 	if _, err := c.TaskRunClient.Create(ctx, taskRun, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create TaskRun: %s", err)
 	}

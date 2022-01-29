@@ -16,21 +16,27 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
-	corev1 "k8s.io/api/core/v1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	knativetest "knative.dev/pkg/test"
 )
 
 // TestStartTime tests that step start times are reported accurately.
 //
-// It runs a TaskRun with 5 steps that each sleep 10 seconds, then checks that
-// the reported step start times are 10+ seconds apart from each other.
-// Scheduling and reporting specifics can result in start times being reported
-// more than 10s apart, but they shouldn't be less than 10s apart.
+// It runs a TaskRun with multiple steps that each sleep for several
+// seconds, then checks that the reported step start times are several
+// seconds apart from each other.  Scheduling and reporting specifics
+// can result in start times being later than expected, but they
+// shouldn't be earlier.
+//
+// The number of seconds between each step has a big impact on the total
+// duration of the test so smaller is better (while still supporting the
+// test's intended purpose).
 func TestStartTime(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
@@ -40,32 +46,24 @@ func TestStartTime(t *testing.T) {
 	knativetest.CleanupOnInterrupt(func() { tearDown(ctx, t, c, namespace) }, t.Logf)
 	defer tearDown(ctx, t, c, namespace)
 	t.Logf("Creating TaskRun in namespace %q", namespace)
-	tr, err := c.TaskRunClient.Create(ctx, &v1beta1.TaskRun{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "start-time-test-",
-			Namespace:    namespace,
-		},
-		Spec: v1beta1.TaskRunSpec{
-			TaskSpec: &v1beta1.TaskSpec{
-				Steps: []v1beta1.Step{{
-					Container: corev1.Container{Image: "ubuntu"},
-					Script:    "sleep 10",
-				}, {
-					Container: corev1.Container{Image: "ubuntu"},
-					Script:    "sleep 10",
-				}, {
-					Container: corev1.Container{Image: "ubuntu"},
-					Script:    "sleep 10",
-				}, {
-					Container: corev1.Container{Image: "ubuntu"},
-					Script:    "sleep 10",
-				}, {
-					Container: corev1.Container{Image: "ubuntu"},
-					Script:    "sleep 10",
-				}},
-			},
-		},
-	}, metav1.CreateOptions{})
+	tr, err := c.TaskRunClient.Create(ctx, parse.MustParseTaskRun(t, fmt.Sprintf(`
+metadata:
+  generateName: start-time-test-
+  namespace: %s
+spec:
+  taskSpec:
+    steps:
+    - image: busybox
+      script: sleep 2
+    - image: busybox
+      script: sleep 2
+    - image: busybox
+      script: sleep 2
+    - image: busybox
+      script: sleep 2
+    - image: busybox
+      script: sleep 2
+`, namespace)), metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating TaskRun: %v", err)
 	}
@@ -81,6 +79,7 @@ func TestStartTime(t *testing.T) {
 	if got, want := len(tr.Status.Steps), len(tr.Spec.TaskSpec.Steps); got != want {
 		t.Errorf("Got unexpected number of step states: got %d, want %d", got, want)
 	}
+	minimumDiff := 2 * time.Second
 	var lastStart metav1.Time
 	for idx, s := range tr.Status.Steps {
 		if s.Terminated == nil {
@@ -88,8 +87,8 @@ func TestStartTime(t *testing.T) {
 			continue
 		}
 		diff := s.Terminated.StartedAt.Time.Sub(lastStart.Time)
-		if diff < 10*time.Second {
-			t.Errorf("Step %d start time was %s since last start, wanted >10s", idx, diff)
+		if diff < minimumDiff {
+			t.Errorf("Step %d start time was %s since last start, wanted > %s", idx, diff, minimumDiff)
 		}
 		lastStart = s.Terminated.StartedAt
 	}

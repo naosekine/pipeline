@@ -24,6 +24,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	apisconfig "github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
+	"github.com/tektoncd/pipeline/pkg/clock"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -132,22 +133,10 @@ func (trs *TaskRunStatus) GetStartedReason() string {
 }
 
 // GetRunningReason returns the reason set to the "Succeeded" condition when
-// the RunsToCompletion starts running. This is used indicate that the resource
+// the TaskRun starts running. This is used indicate that the resource
 // could be validated is starting to perform its job.
 func (trs *TaskRunStatus) GetRunningReason() string {
 	return TaskRunReasonRunning.String()
-}
-
-// MarkResourceNotConvertible adds a Warning-severity condition to the resource noting
-// that it cannot be converted to a higher version.
-func (trs *TaskRunStatus) MarkResourceNotConvertible(err *CannotConvertError) {
-	taskRunCondSet.Manage(trs).SetCondition(apis.Condition{
-		Type:     ConditionTypeConvertible,
-		Status:   corev1.ConditionFalse,
-		Severity: apis.ConditionSeverityWarning,
-		Reason:   err.Field,
-		Message:  err.Message,
-	})
 }
 
 // MarkResourceOngoing sets the ConditionSucceeded condition to ConditionUnknown
@@ -396,7 +385,7 @@ func (tr *TaskRun) IsCancelled() bool {
 }
 
 // HasTimedOut returns true if the TaskRun runtime is beyond the allowed timeout
-func (tr *TaskRun) HasTimedOut(ctx context.Context) bool {
+func (tr *TaskRun) HasTimedOut(ctx context.Context, c clock.Clock) bool {
 	if tr.Status.StartTime.IsZero() {
 		return false
 	}
@@ -405,10 +394,11 @@ func (tr *TaskRun) HasTimedOut(ctx context.Context) bool {
 	if timeout == apisconfig.NoTimeoutDuration {
 		return false
 	}
-	runtime := time.Since(tr.Status.StartTime.Time)
+	runtime := c.Since(tr.Status.StartTime.Time)
 	return runtime > timeout
 }
 
+// GetTimeout returns the timeout for the TaskRun, or the default if not specified
 func (tr *TaskRun) GetTimeout(ctx context.Context) time.Duration {
 	// Use the platform default is no timeout is set
 	if tr.Spec.Timeout == nil {

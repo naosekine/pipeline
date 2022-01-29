@@ -17,8 +17,10 @@ For instructions on using variable substitutions see the relevant section of [th
 | Variable | Description |
 | -------- | ----------- |
 | `params.<param name>` | The value of the parameter at runtime. |
+| `params['<param name>']` | (see above) |
 | `params["<param name>"]` | (see above) |
 | `tasks.<taskName>.results.<resultName>` | The value of the `Task's` result. Can alter `Task` execution order within a `Pipeline`.) |
+| `tasks.<taskName>.results['<resultName>']` | (see above)) |
 | `tasks.<taskName>.results["<resultName>"]` | (see above)) |
 | `workspaces.<workspaceName>.bound` | Whether a `Workspace` has been bound or not. "false" if the `Workspace` declaration has `optional: true` and the Workspace binding was omitted by the PipelineRun. |
 | `context.pipelineRun.name` | The name of the `PipelineRun` that this `Pipeline` is running in. |
@@ -34,10 +36,12 @@ For instructions on using variable substitutions see the relevant section of [th
 | Variable | Description |
 | -------- | ----------- |
 | `params.<param name>` | The value of the parameter at runtime. |
+| `params['<param name>']` | (see above) |
 | `params["<param name>"]` | (see above) |
 | `resources.inputs.<resourceName>.path` | The path to the input resource's directory. |
 | `resources.outputs.<resourceName>.path` | The path to the output resource's directory. |
 | `results.<resultName>.path` | The path to the file where the `Task` writes its results data. |
+| `results['<resultName>'].path` | (see above) |
 | `results["<resultName>"].path` | (see above) |
 | `workspaces.<workspaceName>.path` | The path to the mounted `Workspace`. Empty string if an optional `Workspace` has not been provided by the TaskRun. |
 | `workspaces.<workspaceName>.bound` | Whether a `Workspace` has been bound or not. "false" if an optional`Workspace` has not been provided by the TaskRun. |
@@ -53,6 +57,11 @@ For instructions on using variable substitutions see the relevant section of [th
 | `steps.step-unnamed-<stepIndex>.exitCode.path` | The path to the file where a Step's exit code is stored for a step without any name. |
 
 ### `PipelineResource` variables available in a `Task`
+
+> :warning: **`PipelineResources` are [deprecated](deprecations.md#deprecation-table).**
+>
+> Consider using replacement features instead. Read more in [documentation](migrating-v1alpha1-to-v1beta1.md#replacing-pipelineresources-with-tasks)
+> and [TEP-0074](https://github.com/tektoncd/community/blob/main/teps/0074-deprecate-pipelineresources.md).
 
 Each supported type of `PipelineResource` specified within a `Task` exposes a unique set
 of variables. This section lists the variables exposed by each type. You can access a
@@ -132,6 +141,9 @@ variable via `resources.inputs.<resourceName>.<variableName>` or
 | `Task` | `spec.steps[].name` |
 | `Task` | `spec.steps[].image` |
 | `Task` | `spec.steps[].imagePullPolicy` |
+| `Task` | `spec.steps[].command` |
+| `Task` | `spec.steps[].args` |
+| `Task` | `spec.steps[].script` |
 | `Task` | `spec.steps[].env.value` |
 | `Task` | `spec.steps[].env.valuefrom.secretkeyref.name` |
 | `Task` | `spec.steps[].env.valuefrom.secretkeyref.key` |
@@ -164,6 +176,8 @@ variable via `resources.inputs.<resourceName>.<variableName>` or
 | `Task` | `spec.sidecars[].volumemounts.name` |
 | `Task` | `spec.sidecars[].volumemounts.mountpath` |
 | `Task` | `spec.sidecars[].volumemounts.subpath` |
+| `Task` | `spec.sidecars[].command` |
+| `Task` | `spec.sidecars[].args` |
 | `Task` | `spec.sidecars[].script` |
 | `Task` | `spec.workspaces[].mountPath` |
 | `Pipeline` | `spec.tasks[].params[].value` |
@@ -171,3 +185,4 @@ variable via `resources.inputs.<resourceName>.<variableName>` or
 | `Pipeline` | `spec.results[].value` |
 | `Pipeline` | `spec.tasks[].when[].input` |
 | `Pipeline` | `spec.tasks[].when[].values` |
+| `Pipeline` | `spec.tasks[].workspaces[].subPath` |

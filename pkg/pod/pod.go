@@ -19,7 +19,11 @@ package pod
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
+	"strconv"
+
+	"knative.dev/pkg/kmeta"
 
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
@@ -70,6 +74,7 @@ var (
 	}, {
 		Name:      "tekton-internal-steps",
 		MountPath: pipeline.StepsDir,
+		ReadOnly:  true,
 	}}
 	implicitVolumes = []corev1.Volume{{
 		Name:         "tekton-internal-workspace",
@@ -84,6 +89,9 @@ var (
 		Name:         "tekton-internal-steps",
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}}
+
+	// MaxActiveDeadlineSeconds is a maximum permitted value to be used for a task with no timeout
+	MaxActiveDeadlineSeconds = int64(math.MaxInt32)
 )
 
 // Builder exposes options to configure Pod construction from TaskSpecs/Runs.
@@ -91,7 +99,6 @@ type Builder struct {
 	Images          pipeline.Images
 	KubeClient      kubernetes.Interface
 	EntrypointCache EntrypointCache
-	OverrideHomeEnv bool
 }
 
 // Transformer is a function that will transform a Pod. This can be used to mutate
@@ -106,21 +113,14 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 		scriptsInit                                       *corev1.Container
 		initContainers, stepContainers, sidecarContainers []corev1.Container
 		volumes                                           []corev1.Volume
-		volumeMounts                                      []corev1.VolumeMount
 	)
+	volumeMounts := []corev1.VolumeMount{binROMount}
 	implicitEnvVars := []corev1.EnvVar{}
 	alphaAPIEnabled := config.FromContextOrDefaults(ctx).FeatureFlags.EnableAPIFields == config.AlphaAPIFields
 
 	// Add our implicit volumes first, so they can be overridden by the user if they prefer.
 	volumes = append(volumes, implicitVolumes...)
 	volumeMounts = append(volumeMounts, implicitVolumeMounts...)
-
-	if b.OverrideHomeEnv {
-		implicitEnvVars = append(implicitEnvVars, corev1.EnvVar{
-			Name:  "HOME",
-			Value: pipeline.HomeDir,
-		})
-	}
 
 	// Create Volumes and VolumeMounts for any credentials found in annotated
 	// Secrets, along with any arguments needed by Step entrypoints to process
@@ -156,7 +156,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 
 	// Initialize any workingDirs under /workspace.
-	if workingDirInit := workingDirInit(b.Images.ShellImage, stepContainers); workingDirInit != nil {
+	if workingDirInit := workingDirInit(b.Images.WorkingDirInitImage, stepContainers); workingDirInit != nil {
 		initContainers = append(initContainers, *workingDirInit)
 	}
 
@@ -192,8 +192,11 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 	// place the entrypoint first in case other init containers rely on its
 	// features (e.g. decode-script).
-	initContainers = append([]corev1.Container{entrypointInit}, initContainers...)
-	volumes = append(volumes, binVolume, runVolume, downwardVolume)
+	initContainers = append([]corev1.Container{
+		entrypointInit,
+		tektonDirInit(b.Images.EntrypointImage, steps),
+	}, initContainers...)
+	volumes = append(volumes, binVolume, downwardVolume)
 
 	// Add implicit env vars.
 	// They're prepended to the list, so that if the user specified any
@@ -228,6 +231,14 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 			s.VolumeMounts = append(s.VolumeMounts, *vm)
 		}
 
+		// Add /tekton/run state volumes.
+		// Each step should only mount their own volume as RW,
+		// all other steps should be mounted RO.
+		volumes = append(volumes, runVolume(i))
+		for j := 0; j < len(stepContainers); j++ {
+			s.VolumeMounts = append(s.VolumeMounts, runMount(j, i != j))
+		}
+
 		requestedVolumeMounts := map[string]bool{}
 		for _, vm := range s.VolumeMounts {
 			requestedVolumeMounts[filepath.Clean(vm.MountPath)] = true
@@ -243,15 +254,10 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 
 	// This loop:
-	// - defaults workingDir to /workspace
 	// - sets container name to add "step-" prefix or "step-unnamed-#" if not specified.
 	// TODO(#1605): Remove this loop and make each transformation in
 	// isolation.
-	shouldOverrideWorkingDir := shouldOverrideWorkingDir(ctx)
 	for i, s := range stepContainers {
-		if s.WorkingDir == "" && shouldOverrideWorkingDir {
-			stepContainers[i].WorkingDir = pipeline.WorkspaceDir
-		}
 		stepContainers[i].Name = names.SimpleNameGenerator.RestrictLength(StepName(s.Name, i))
 	}
 
@@ -288,7 +294,7 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 		priorityClassName = *podTemplate.PriorityClassName
 	}
 
-	podAnnotations := taskRun.Annotations
+	podAnnotations := kmeta.CopyMap(taskRun.Annotations)
 	version, err := changeset.Get()
 	if err != nil {
 		return nil, err
@@ -298,18 +304,27 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	if shouldAddReadyAnnotationOnPodCreate(ctx, taskSpec.Sidecars) {
 		podAnnotations[readyAnnotation] = readyAnnotationValue
 	}
-	activeDeadlineSeconds := int64(taskRun.GetTimeout(ctx).Seconds() * deadlineFactor)
 
-	pod := &corev1.Pod{
+	// calculate the activeDeadlineSeconds based on the specified timeout (uses default timeout if it's not specified)
+	activeDeadlineSeconds := int64(taskRun.GetTimeout(ctx).Seconds() * deadlineFactor)
+	// set activeDeadlineSeconds to the max. allowed value i.e. max int32 when timeout is explicitly set to 0
+	if taskRun.GetTimeout(ctx) == config.NoTimeoutDuration {
+		activeDeadlineSeconds = MaxActiveDeadlineSeconds
+	}
+
+	podNameSuffix := "-pod"
+	if taskRunRetries := len(taskRun.Status.RetriesStatus); taskRunRetries > 0 {
+		podNameSuffix = fmt.Sprintf("%s-retry%d", podNameSuffix, taskRunRetries)
+	}
+	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			// We execute the build's pod in the same namespace as where the build was
 			// created so that it can access colocated resources.
 			Namespace: taskRun.Namespace,
 			// Generate a unique name based on the build's name.
-			// Add a unique suffix to avoid confusion when a build
-			// is deleted and re-created with the same name.
-			// We don't use RestrictLengthWithRandomSuffix here because k8s fakes don't support it.
-			Name: names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("%s-pod", taskRun.Name)),
+			// The name is univocally generated so that in case of
+			// stale informer cache, we never create duplicate Pods
+			Name: kmeta.ChildName(taskRun.Name, podNameSuffix),
 			// If our parent TaskRun is deleted, then we should be as well.
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(taskRun, groupVersionKind),
@@ -342,13 +357,13 @@ func (b *Builder) Build(ctx context.Context, taskRun *v1beta1.TaskRun, taskSpec 
 	}
 
 	for _, f := range transformers {
-		pod, err = f(pod)
+		newPod, err = f(newPod)
 		if err != nil {
-			return pod, err
+			return newPod, err
 		}
 	}
 
-	return pod, nil
+	return newPod, nil
 }
 
 // makeLabels constructs the labels we will propagate from TaskRuns to Pods.
@@ -368,28 +383,6 @@ func makeLabels(s *v1beta1.TaskRun) map[string]string {
 	return labels
 }
 
-// ShouldOverrideHomeEnv returns a bool indicating whether a Pod should have its
-// $HOME environment variable overwritten with /tekton/home or if it should be
-// left unmodified. The default behaviour is to overwrite the $HOME variable
-// but this is planned to change in an upcoming release.
-//
-// For further reference see https://github.com/tektoncd/pipeline/issues/2013
-func ShouldOverrideHomeEnv(ctx context.Context) bool {
-	cfg := config.FromContextOrDefaults(ctx)
-	return !cfg.FeatureFlags.DisableHomeEnvOverwrite
-}
-
-// shouldOverrideWorkingDir returns a bool indicating whether a Pod should have its
-// working directory overwritten with /workspace or if it should be
-// left unmodified. The default behaviour is to overwrite the working directory with '/workspace'
-// if not specified by the user,  but this is planned to change in an upcoming release.
-//
-// For further reference see https://github.com/tektoncd/pipeline/issues/1836
-func shouldOverrideWorkingDir(ctx context.Context) bool {
-	cfg := config.FromContextOrDefaults(ctx)
-	return !cfg.FeatureFlags.DisableWorkingDirOverwrite
-}
-
 // shouldAddReadyAnnotationonPodCreate returns a bool indicating whether the
 // controller should add the `Ready` annotation when creating the Pod. We cannot
 // add the annotation if Tekton is running in a cluster with injected sidecars
@@ -403,4 +396,38 @@ func shouldAddReadyAnnotationOnPodCreate(ctx context.Context, sidecars []v1beta1
 	// controllers.
 	cfg := config.FromContextOrDefaults(ctx)
 	return !cfg.FeatureFlags.RunningInEnvWithInjectedSidecars
+}
+
+func runMount(i int, ro bool) corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      fmt.Sprintf("%s-%d", runVolumeName, i),
+		MountPath: filepath.Join(runDir, strconv.Itoa(i)),
+		ReadOnly:  ro,
+	}
+}
+
+func runVolume(i int) corev1.Volume {
+	return corev1.Volume{
+		Name:         fmt.Sprintf("%s-%d", runVolumeName, i),
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
+}
+
+func tektonDirInit(image string, steps []v1beta1.Step) corev1.Container {
+	cmd := make([]string, 0, len(steps)+2)
+	cmd = append(cmd, "/ko-app/entrypoint", "step-init")
+	for i, s := range steps {
+		cmd = append(cmd, StepName(s.Name, i))
+	}
+
+	return corev1.Container{
+		Name:       "step-init",
+		Image:      image,
+		WorkingDir: "/",
+		Command:    cmd,
+		VolumeMounts: []corev1.VolumeMount{{
+			Name:      "tekton-internal-steps",
+			MountPath: pipeline.StepsDir,
+		}},
+	}
 }

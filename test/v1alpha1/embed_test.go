@@ -21,9 +21,11 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
-	tb "github.com/tektoncd/pipeline/internal/builder/v1alpha1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	knativetest "knative.dev/pkg/test"
@@ -50,10 +52,10 @@ func TestTaskRun_EmbeddedResource(t *testing.T) {
 	defer tearDown(ctx, t, c, namespace)
 
 	t.Logf("Creating Task and TaskRun in namespace %s", namespace)
-	if _, err := c.TaskClient.Create(ctx, getEmbeddedTask([]string{"/bin/sh", "-c", fmt.Sprintf("echo %s", taskOutput)}), metav1.CreateOptions{}); err != nil {
+	if _, err := c.TaskClient.Create(ctx, getEmbeddedTask(t, []string{"/bin/sh", "-c", fmt.Sprintf("echo %s", taskOutput)}), metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", embedTaskName, err)
 	}
-	if _, err := c.TaskRunClient.Create(ctx, getEmbeddedTaskRun(namespace), metav1.CreateOptions{}); err != nil {
+	if _, err := c.TaskRunClient.Create(ctx, getEmbeddedTaskRun(t, namespace), metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create TaskRun `%s`: %s", embedTaskRunName, err)
 	}
 
@@ -66,31 +68,43 @@ func TestTaskRun_EmbeddedResource(t *testing.T) {
 	// completion of the TaskRun means the TaskRun did what it was intended.
 }
 
-func getEmbeddedTask(args []string) *v1alpha1.Task {
-	return tb.Task(embedTaskName,
-		tb.TaskSpec(
-			tb.TaskInputs(tb.InputsResource("docs", v1alpha1.PipelineResourceTypeGit)),
-			tb.Step("ubuntu",
-				tb.StepCommand("/bin/bash"),
-				tb.StepArgs("-c", "cat /workspace/docs/LICENSE"),
-			),
-			tb.Step("busybox", tb.StepCommand(args...)),
-		))
+func getEmbeddedTask(t *testing.T, args []string) *v1alpha1.Task {
+	var argsForYaml []string
+	for _, s := range args {
+		argsForYaml = append(argsForYaml, fmt.Sprintf("'%s'", s))
+	}
+	return parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  inputs:
+    resources:
+    - name: docs
+      type: git
+  steps:
+  - image: ubuntu
+    command: ['/bin/bash']
+    args: ['-c', 'cat /workspace/docs/LICENSE']
+  - image: busybox
+    command: %s
+`, embedTaskName, fmt.Sprintf("[%s]", strings.Join(argsForYaml, ", "))))
 }
 
-func getEmbeddedTaskRun(namespace string) *v1alpha1.TaskRun {
-	testSpec := &v1alpha1.PipelineResourceSpec{
-		Type: v1alpha1.PipelineResourceTypeGit,
-		Params: []v1alpha1.ResourceParam{{
-			Name:  "URL",
-			Value: "https://github.com/knative/docs",
-		}},
-	}
-	return tb.TaskRun(embedTaskRunName,
-		tb.TaskRunNamespace(namespace),
-		tb.TaskRunSpec(
-			tb.TaskRunInputs(
-				tb.TaskRunInputsResource("docs", tb.TaskResourceBindingResourceSpec(testSpec)),
-			),
-			tb.TaskRunTaskRef(embedTaskName)))
+func getEmbeddedTaskRun(t *testing.T, namespace string) *v1alpha1.TaskRun {
+	return parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  inputs:
+    resources:
+    - name: docs
+      resourceSpec:
+        type: git
+        params:
+        - name: URL
+          value: https://github.com/knative/docs
+  taskRef:
+    name: %s
+`, embedTaskRunName, namespace, embedTaskName))
 }

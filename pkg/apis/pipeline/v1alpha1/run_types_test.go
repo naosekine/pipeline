@@ -118,7 +118,7 @@ func TestRunHasStarted(t *testing.T) {
 		name: "runWithStartTime",
 		runStatus: v1alpha1.RunStatus{
 			RunStatusFields: v1alpha1.RunStatusFields{
-				StartTime: &metav1.Time{Time: time.Now()},
+				StartTime: &metav1.Time{Time: now},
 			},
 		},
 		expectedValue: true,
@@ -178,6 +178,7 @@ kind: Run
 metadata:
   name: run
 spec:
+  retries: 3
   ref:
     apiVersion: example.dev/v0
     kind: Example
@@ -207,6 +208,7 @@ status:
 			Name: "run",
 		},
 		Spec: v1alpha1.RunSpec{
+			Retries: 3,
 			Ref: &v1alpha1.TaskRef{
 				APIVersion: "example.dev/v0",
 				Kind:       "Example",
@@ -299,7 +301,7 @@ func TestRunHasTimedOut(t *testing.T) {
 			TypeMeta: metav1.TypeMeta{Kind: "kind", APIVersion: "apiVersion"},
 			Status: v1alpha1.RunStatus{
 				RunStatusFields: v1alpha1.RunStatusFields{
-					StartTime: &metav1.Time{Time: time.Now()},
+					StartTime: &metav1.Time{Time: now},
 				},
 			}},
 		expectedValue: false,
@@ -309,7 +311,7 @@ func TestRunHasTimedOut(t *testing.T) {
 			TypeMeta: metav1.TypeMeta{Kind: "kind", APIVersion: "apiVersion"},
 			Status: v1alpha1.RunStatus{
 				RunStatusFields: v1alpha1.RunStatusFields{
-					StartTime: &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+					StartTime: &metav1.Time{Time: now.Add(-1 * (apisconfig.DefaultTimeoutMinutes + 1) * time.Minute)},
 				},
 			}},
 		expectedValue: true,
@@ -319,7 +321,7 @@ func TestRunHasTimedOut(t *testing.T) {
 			TypeMeta: metav1.TypeMeta{Kind: "kind", APIVersion: "apiVersion"},
 			Spec:     v1alpha1.RunSpec{Timeout: &metav1.Duration{10 * time.Second}},
 			Status: v1alpha1.RunStatus{RunStatusFields: v1alpha1.RunStatusFields{
-				StartTime: &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+				StartTime: &metav1.Time{Time: now.Add(-1 * (apisconfig.DefaultTimeoutMinutes + 1) * time.Minute)},
 			}}},
 		expectedValue: true,
 	}, {
@@ -335,14 +337,14 @@ func TestRunHasTimedOut(t *testing.T) {
 			TypeMeta: metav1.TypeMeta{Kind: "kind", APIVersion: "apiVersion"},
 			Spec:     v1alpha1.RunSpec{Timeout: &metav1.Duration{10 * time.Second}},
 			Status: v1alpha1.RunStatus{RunStatusFields: v1alpha1.RunStatusFields{
-				StartTime: &metav1.Time{Time: time.Now()},
+				StartTime: &metav1.Time{Time: now},
 			}}},
 		expectedValue: false,
 	}}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := tc.run.HasTimedOut()
+			result := tc.run.HasTimedOut(testClock{})
 			if d := cmp.Diff(result, tc.expectedValue); d != "" {
 				t.Fatalf(diff.PrintWantGot(d))
 			}

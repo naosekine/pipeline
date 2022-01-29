@@ -20,23 +20,20 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	"github.com/tektoncd/pipeline/pkg/apis/config"
 )
 
 func TestAddContextParams(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("no-alpha", func(t *testing.T) {
-		ctx := AddContextParams(ctx, []Param{{Name: "a"}})
+	t.Run("not-enabled", func(t *testing.T) {
+		ctx := addContextParams(ctx, []Param{{Name: "a"}})
 		if v := ctx.Value(paramCtxKey); v != nil {
 			t.Errorf("expected no param context values, got %v", v)
 		}
 	})
 
 	// Enable Alpha features.
-	cfg := config.FromContextOrDefaults(ctx)
-	cfg.FeatureFlags = &config.FeatureFlags{EnableAPIFields: "alpha"}
-	ctx = config.ToContext(ctx, cfg)
+	ctx = WithImplicitParamsEnabled(ctx, true)
 
 	// These test cases should run sequentially. Each step will modify the
 	// above context.
@@ -108,7 +105,7 @@ func TestAddContextParams(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx = AddContextParams(ctx, tc.params)
+			ctx = addContextParams(ctx, tc.params)
 			got := ctx.Value(paramCtxKey)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("-want,+got: %s", diff)
@@ -120,17 +117,15 @@ func TestAddContextParams(t *testing.T) {
 func TestAddContextParamSpec(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("no-alpha", func(t *testing.T) {
-		ctx := AddContextParamSpec(ctx, []ParamSpec{{Name: "a"}})
+	t.Run("not-enabled", func(t *testing.T) {
+		ctx := addContextParamSpec(ctx, []ParamSpec{{Name: "a"}})
 		if v := ctx.Value(paramCtxKey); v != nil {
 			t.Errorf("expected no param context values, got %v", v)
 		}
 	})
 
 	// Enable Alpha features.
-	cfg := config.FromContextOrDefaults(ctx)
-	cfg.FeatureFlags = &config.FeatureFlags{EnableAPIFields: "alpha"}
-	ctx = config.ToContext(ctx, cfg)
+	ctx = WithImplicitParamsEnabled(ctx, true)
 
 	// These test cases should run sequentially. Each step will modify the
 	// above context.
@@ -188,7 +183,7 @@ func TestAddContextParamSpec(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx = AddContextParamSpec(ctx, tc.params)
+			ctx = addContextParamSpec(ctx, tc.params)
 			got := ctx.Value(paramCtxKey)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("-want,+got: %s", diff)
@@ -213,19 +208,17 @@ func TestGetContextParams(t *testing.T) {
 			Description: "racecar",
 		},
 	}
-	t.Run("no-alpha", func(t *testing.T) {
-		ctx := AddContextParamSpec(ctx, want)
-		if v := GetContextParamSpecs(ctx); v != nil {
+	t.Run("not-enabled", func(t *testing.T) {
+		ctx := addContextParamSpec(ctx, want)
+		if v := getContextParamSpecs(ctx); v != nil {
 			t.Errorf("expected no param context values, got %v", v)
 		}
 	})
 
 	// Enable Alpha features.
-	cfg := config.FromContextOrDefaults(ctx)
-	cfg.FeatureFlags = &config.FeatureFlags{EnableAPIFields: "alpha"}
-	ctx = config.ToContext(ctx, cfg)
+	ctx = WithImplicitParamsEnabled(ctx, true)
 
-	ctx = AddContextParamSpec(ctx, want)
+	ctx = addContextParamSpec(ctx, want)
 
 	for _, tc := range []struct {
 		name    string
@@ -270,7 +263,7 @@ func TestGetContextParams(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := GetContextParams(ctx, tc.overlay...)
+			got := getContextParams(ctx, tc.overlay...)
 			if diff := cmp.Diff(tc.want, got, cmpopts.SortSlices(func(x, y Param) bool { return x.Name < y.Name })); diff != "" {
 				t.Errorf("-want,+got: %s", diff)
 			}
@@ -294,20 +287,18 @@ func TestGetContextParamSpecs(t *testing.T) {
 			Description: "racecar",
 		},
 	}
-	t.Run("no-alpha", func(t *testing.T) {
-		ctx := AddContextParamSpec(ctx, want)
-		if v := GetContextParamSpecs(ctx); v != nil {
+	t.Run("not-enabled", func(t *testing.T) {
+		ctx := addContextParamSpec(ctx, want)
+		if v := getContextParamSpecs(ctx); v != nil {
 			t.Errorf("expected no param context values, got %v", v)
 		}
 	})
 
 	// Enable Alpha features.
-	cfg := config.FromContextOrDefaults(ctx)
-	cfg.FeatureFlags = &config.FeatureFlags{EnableAPIFields: "alpha"}
-	ctx = config.ToContext(ctx, cfg)
+	ctx = WithImplicitParamsEnabled(ctx, true)
 
-	ctx = AddContextParamSpec(ctx, want)
-	got := GetContextParamSpecs(ctx)
+	ctx = addContextParamSpec(ctx, want)
+	got := getContextParamSpecs(ctx)
 	if diff := cmp.Diff(want, got, cmpopts.SortSlices(func(x, y ParamSpec) bool { return x.Name < y.Name })); diff != "" {
 		t.Errorf("-want,+got: %s", diff)
 	}

@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
-	tb "github.com/tektoncd/pipeline/internal/builder/v1alpha1"
+	"github.com/tektoncd/pipeline/test/parse"
+
 	"github.com/tektoncd/pipeline/pkg/apis/config"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -72,28 +72,39 @@ func TestStorageBucketPipelineRun(t *testing.T) {
 	defer deleteBucketSecret(ctx, c, t, namespace)
 
 	t.Logf("Creating GCS bucket %s", bucketName)
-	createbuckettask := tb.Task("createbuckettask", tb.TaskSpec(
-		tb.TaskVolume("bucket-secret-volume", tb.VolumeSource(corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName: bucketSecretName,
-			},
-		})),
-		tb.Step("gcr.io/google.com/cloudsdktool/cloud-sdk:alpine", tb.StepName("step1"),
-			tb.StepCommand("/bin/bash"),
-			tb.StepArgs("-c", fmt.Sprintf("gcloud auth activate-service-account --key-file /var/secret/bucket-secret/bucket-secret-key && gsutil mb gs://%s", bucketName)),
-			tb.StepVolumeMount("bucket-secret-volume", fmt.Sprintf("/var/secret/%s", bucketSecretName)),
-			tb.StepEnvVar("CREDENTIALS", fmt.Sprintf("/var/secret/%s/%s", bucketSecretName, bucketSecretKey)),
-		),
-	),
-	)
+	createbuckettask := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: createbuckettask
+spec:
+  steps:
+  - name: step1
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:alpine
+    command: ['/bin/bash']
+    args: ['-c', 'gcloud auth activate-service-account --key-file /var/secret/bucket-secret/bucket-secret-key && gsutil mb gs://%s']
+    volumeMounts:
+    - name: bucket-secret-volume
+      mountPath: /var/secret/%s
+    env:
+    - name: CREDENTIALS
+      value: /var/secret/%s/%s
+  volumes:
+  - name: bucket-secret-volume
+    secret:
+      secretName: %s
+`, bucketName, bucketSecretName, bucketSecretName, bucketSecretKey, bucketSecretName))
 
 	t.Logf("Creating Task %s", "createbuckettask")
 	if _, err := c.TaskClient.Create(ctx, createbuckettask, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", "createbuckettask", err)
 	}
 
-	createbuckettaskrun := tb.TaskRun("createbuckettaskrun",
-		tb.TaskRunSpec(tb.TaskRunTaskRef("createbuckettask")))
+	createbuckettaskrun := parse.MustParseAlphaTaskRun(t, `
+metadata:
+  name: createbuckettaskrun
+spec:
+  taskRef:
+    name: createbuckettask
+`)
 
 	t.Logf("Creating TaskRun %s", "createbuckettaskrun")
 	if _, err := c.TaskRunClient.Create(ctx, createbuckettaskrun, metav1.CreateOptions{}); err != nil {
@@ -124,59 +135,111 @@ func TestStorageBucketPipelineRun(t *testing.T) {
 	defer resetConfigMap(ctx, t, c, systemNamespace, config.GetArtifactBucketConfigName(), originalConfigMapData)
 
 	t.Logf("Creating Git PipelineResource %s", helloworldResourceName)
-	helloworldResource := tb.PipelineResource(helloworldResourceName, tb.PipelineResourceSpec(
-		v1alpha1.PipelineResourceTypeGit,
-		tb.PipelineResourceSpecParam("Url", "https://github.com/pivotal-nader-ziada/gohelloworld"),
-		tb.PipelineResourceSpecParam("Revision", "master"),
-	),
-	)
+	helloworldResource := parse.MustParsePipelineResource(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  params:
+  - name: Url
+	value: https://github.com/pivotal-nader-ziada/gohelloworld
+  - name: Revision
+	value: master
+  type: git
+`, helloworldResourceName))
 	if _, err := c.PipelineResourceClient.Create(ctx, helloworldResource, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline Resource `%s`: %s", helloworldResourceName, err)
 	}
 
 	t.Logf("Creating Task %s", addFileTaskName)
-	addFileTask := tb.Task(addFileTaskName, tb.TaskSpec(
-		tb.TaskInputs(tb.InputsResource(helloworldResourceName, v1alpha1.PipelineResourceTypeGit)),
-		tb.TaskOutputs(tb.OutputsResource(helloworldResourceName, v1alpha1.PipelineResourceTypeGit)),
-		tb.Step("ubuntu", tb.StepName("addfile"), tb.StepCommand("/bin/bash"),
-			tb.StepArgs("-c", "'#!/bin/bash\necho hello' > /workspace/helloworldgit/newfile"),
-		),
-		tb.Step("ubuntu", tb.StepName("make-executable"), tb.StepCommand("chmod"),
-			tb.StepArgs("+x", "/workspace/helloworldgit/newfile")),
-	))
+	addFileTask := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  inputs:
+    resources:
+    - name: %s
+      type: git
+  outputs:
+    resources:
+    - name: %s
+      type: git
+  steps:
+  - image: ubuntu
+    name: addfile
+    script: |-
+      echo '#!/bin/bash
+      echo hello' > /workspace/helloworldgit/newfile
+  - image: ubuntu
+    name: make-executable
+    script: chmod +x /workspace/helloworldgit/newfile
+`, addFileTaskName, helloworldResourceName, helloworldResourceName))
 	if _, err := c.TaskClient.Create(ctx, addFileTask, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", addFileTaskName, err)
 	}
 
 	t.Logf("Creating Task %s", runFileTaskName)
-	readFileTask := tb.Task(runFileTaskName, tb.TaskSpec(
-		tb.TaskInputs(tb.InputsResource(helloworldResourceName, v1alpha1.PipelineResourceTypeGit)),
-		tb.Step("ubuntu", tb.StepName("runfile"), tb.StepCommand("/workspace/helloworld/newfile")),
-	))
+	readFileTask := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  resources:
+    inputs:
+    - name: %s
+      type: git
+  steps:
+  - command: ['/workspace/hellowrld/newfile']
+    image: ubuntu
+    name: runfile
+`, runFileTaskName, helloworldResourceName))
 	if _, err := c.TaskClient.Create(ctx, readFileTask, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", runFileTaskName, err)
 	}
 
 	t.Logf("Creating Pipeline %s", bucketTestPipelineName)
-	bucketTestPipeline := tb.Pipeline(bucketTestPipelineName, tb.PipelineSpec(
-		tb.PipelineDeclaredResource("source-repo", "git"),
-		tb.PipelineTask("addfile", addFileTaskName,
-			tb.PipelineTaskInputResource("helloworldgit", "source-repo"),
-			tb.PipelineTaskOutputResource("helloworldgit", "source-repo"),
-		),
-		tb.PipelineTask("runfile", runFileTaskName,
-			tb.PipelineTaskInputResource("helloworldgit", "source-repo", tb.From("addfile")),
-		),
-	))
+	bucketTestPipeline := parse.MustParseAlphaPipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s 
+spec:
+  resources:
+  - name: source-repo
+    type: git
+  tasks:
+  - name: addfile
+    resources:
+      inputs:
+      - name: helloworldgit
+        resource: source-repo
+      outputs:
+      - name: helloworldgit
+        resource: source-repo
+    taskRef:
+      name: %s
+  - name: runfile
+    resources:
+      inputs:
+      - name: helloworldgit
+        resource: source-repo
+        from:
+        - addfile
+    taskRef:
+      name: %s
+`, bucketTestPipelineName, addFileTaskName, runFileTaskName))
 	if _, err := c.PipelineClient.Create(ctx, bucketTestPipeline, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline `%s`: %s", bucketTestPipelineName, err)
 	}
 
 	t.Logf("Creating PipelineRun %s", bucketTestPipelineRunName)
-	bucketTestPipelineRun := tb.PipelineRun(bucketTestPipelineRunName, tb.PipelineRunSpec(
-		bucketTestPipelineName,
-		tb.PipelineRunResourceBinding("source-repo", tb.PipelineResourceBindingRef(helloworldResourceName)),
-	))
+	bucketTestPipelineRun := parse.MustParseAlphaPipelineRun(t, fmt.Sprintf(`
+metadata:
+  name: %s
+spec:
+  pipelineRef:
+    name: %s
+  resources:
+  - name: source-repo
+    resourceRef:
+      name: %s
+`, bucketTestPipelineRunName, bucketTestPipelineName, helloworldResourceName))
 	if _, err := c.PipelineRunClient.Create(ctx, bucketTestPipelineRun, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create PipelineRun `%s`: %s", bucketTestPipelineRunName, err)
 	}
@@ -238,28 +301,28 @@ func resetConfigMap(ctx context.Context, t *testing.T, c *clients, namespace, co
 }
 
 func runTaskToDeleteBucket(ctx context.Context, c *clients, t *testing.T, namespace, bucketName, bucketSecretName, bucketSecretKey string) {
-	deletelbuckettask := tb.Task("deletelbuckettask", tb.TaskSpec(
-		tb.TaskVolume("bucket-secret-volume", tb.VolumeSource(corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName: bucketSecretName,
-			},
-		})),
-		tb.Step("gcr.io/google.com/cloudsdktool/cloud-sdk:alpine", tb.StepName("step1"),
-			tb.StepCommand("/bin/bash"),
-			tb.StepArgs("-c", fmt.Sprintf("gcloud auth activate-service-account --key-file /var/secret/bucket-secret/bucket-secret-key && gsutil rm -r gs://%s", bucketName)),
-			tb.StepVolumeMount("bucket-secret-volume", fmt.Sprintf("/var/secret/%s", bucketSecretName)),
-			tb.StepEnvVar("CREDENTIALS", fmt.Sprintf("/var/secret/%s/%s", bucketSecretName, bucketSecretKey)),
-		),
-	),
-	)
+	deletelbuckettask := parse.MustParseAlphaTask(t, fmt.Sprintf(`
+metadata:
+  name: deletelbuckettask
+spec:
+  volumes:
+  - name: bucket-secret-volume
+    secret:
+      secretName: %s
+`, bucketSecretName))
 
 	t.Logf("Creating Task %s", "deletelbuckettask")
 	if _, err := c.TaskClient.Create(ctx, deletelbuckettask, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task `%s`: %s", "deletelbuckettask", err)
 	}
 
-	deletelbuckettaskrun := tb.TaskRun("deletelbuckettaskrun",
-		tb.TaskRunSpec(tb.TaskRunTaskRef("deletelbuckettask")))
+	deletelbuckettaskrun := parse.MustParseAlphaTaskRun(t, fmt.Sprintf(`
+metadata:
+  name: deletelbuckettaskrun
+spec:
+  taskRef:
+    name: deletelbuckettask
+`))
 
 	t.Logf("Creating TaskRun %s", "deletelbuckettaskrun")
 	if _, err := c.TaskRunClient.Create(ctx, deletelbuckettaskrun, metav1.CreateOptions{}); err != nil {

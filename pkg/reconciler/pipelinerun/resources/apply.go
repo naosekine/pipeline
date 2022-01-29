@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
+	"github.com/tektoncd/pipeline/pkg/substitution"
 	corev1 "k8s.io/api/core/v1"
 	"knative.dev/pkg/apis"
 )
@@ -38,6 +39,7 @@ func ApplyParameters(p *v1beta1.PipelineSpec, pr *v1beta1.PipelineRun) *v1beta1.
 	patterns := []string{
 		"params.%s",
 		"params[%q]",
+		"params['%s']",
 	}
 
 	// Set all the default stringReplacements
@@ -146,6 +148,9 @@ func ApplyReplacements(p *v1beta1.PipelineSpec, replacements map[string]string, 
 
 	for i := range p.Tasks {
 		p.Tasks[i].Params = replaceParamValues(p.Tasks[i].Params, replacements, arrayReplacements)
+		for j := range p.Tasks[i].Workspaces {
+			p.Tasks[i].Workspaces[j].SubPath = substitution.ApplyReplacements(p.Tasks[i].Workspaces[j].SubPath, replacements)
+		}
 		for j := range p.Tasks[i].Conditions {
 			c := p.Tasks[i].Conditions[j]
 			c.Params = replaceParamValues(c.Params, replacements, arrayReplacements)

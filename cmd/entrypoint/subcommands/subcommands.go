@@ -20,6 +20,7 @@ import (
 	"fmt"
 )
 
+// SubcommandSuccessful is returned for successful subcommand executions.
 type SubcommandSuccessful struct {
 	message string
 }
@@ -28,6 +29,7 @@ func (err SubcommandSuccessful) Error() string {
 	return err.message
 }
 
+// SubcommandError is returned for failed subcommand executions.
 type SubcommandError struct {
 	subcommand string
 	message    string
@@ -70,6 +72,11 @@ func Process(args []string) error {
 			}
 			return SubcommandSuccessful{message: fmt.Sprintf("Decoded script %s", src)}
 		}
+	case StepInitCommand:
+		if err := stepInit(args[1:]); err != nil {
+			return SubcommandError{subcommand: StepInitCommand, message: err.Error()}
+		}
+		return SubcommandSuccessful{message: "Setup /step directories"}
 	default:
 	}
 	return nil

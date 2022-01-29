@@ -173,7 +173,7 @@ _EOF_
 scriptfile="/tekton/scripts/script-3-mssqb"
 touch ${scriptfile} && chmod +x ${scriptfile}
 cat > ${scriptfile} << '_EOF_'
-IyEvYmluL3NoCnNldCAteGUKbm8tc2hlYmFuZw==
+IyEvYmluL3NoCnNldCAtZQpuby1zaGViYW5n
 _EOF_
 /tekton/bin/entrypoint decode-script "${scriptfile}"
 `},
@@ -247,7 +247,7 @@ script-3`,
 			Args:         []string{"my", "args"},
 		},
 	}}, []v1beta1.Sidecar{}, &v1beta1.TaskRunDebug{
-		Breakpoint: []string{BreakpointOnFailure},
+		Breakpoint: []string{breakpointOnFailure},
 	})
 	wantInit := &corev1.Container{
 		Name:    "place-scripts",
@@ -268,25 +268,25 @@ _EOF_
 scriptfile="/tekton/scripts/script-3-mssqb"
 touch ${scriptfile} && chmod +x ${scriptfile}
 cat > ${scriptfile} << '_EOF_'
-IyEvYmluL3NoCnNldCAteGUKbm8tc2hlYmFuZw==
+IyEvYmluL3NoCnNldCAtZQpuby1zaGViYW5n
 _EOF_
 /tekton/bin/entrypoint decode-script "${scriptfile}"
 tmpfile="/tekton/debug/scripts/debug-continue"
 touch ${tmpfile} && chmod +x ${tmpfile}
 cat > ${tmpfile} << 'debug-continue-heredoc-randomly-generated-78c5n'
 #!/bin/sh
-set -xe
+set -e
 
 numberOfSteps=4
 debugInfo=/tekton/debug/info
-tektonTools=/tekton/run
+tektonRun=/tekton/run
 
 postFile="$(ls ${debugInfo} | grep -E '[0-9]+' | tail -1)"
 stepNumber="$(echo ${postFile} | sed 's/[^0-9]*//g')"
 
 if [ $stepNumber -lt $numberOfSteps ]; then
-	touch ${tektonTools}/${stepNumber} # Mark step as success
-	echo "0" > ${tektonTools}/${stepNumber}.breakpointexit
+	touch ${tektonRun}/${stepNumber}/out # Mark step as success
+	echo "0" > ${tektonRun}/${stepNumber}/out.breakpointexit
 	echo "Executing step $stepNumber..."
 else
 	echo "Last step (no. $stepNumber) has already been executed, breakpoint exiting !"
@@ -297,18 +297,18 @@ tmpfile="/tekton/debug/scripts/debug-fail-continue"
 touch ${tmpfile} && chmod +x ${tmpfile}
 cat > ${tmpfile} << 'debug-fail-continue-heredoc-randomly-generated-6nl7g'
 #!/bin/sh
-set -xe
+set -e
 
 numberOfSteps=4
 debugInfo=/tekton/debug/info
-tektonTools=/tekton/run
+tektonRun=/tekton/run
 
 postFile="$(ls ${debugInfo} | grep -E '[0-9]+' | tail -1)"
 stepNumber="$(echo ${postFile} | sed 's/[^0-9]*//g')"
 
 if [ $stepNumber -lt $numberOfSteps ]; then
-	touch ${tektonTools}/${stepNumber}.err # Mark step as a failure
-	echo "1" > ${tektonTools}/${stepNumber}.breakpointexit
+	touch ${tektonRun}/${stepNumber}/out.err # Mark step as a failure
+	echo "1" > ${tektonRun}/${stepNumber}/out.breakpointexit
 	echo "Executing step $stepNumber..."
 else
 	echo "Last step (no. $stepNumber) has already been executed, breakpoint exiting !"

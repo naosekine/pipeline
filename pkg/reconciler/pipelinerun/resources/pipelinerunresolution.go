@@ -21,13 +21,13 @@ import (
 	"fmt"
 	"strconv"
 
+	"knative.dev/pkg/kmeta"
+
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	resourcev1alpha1 "github.com/tektoncd/pipeline/pkg/apis/resource/v1alpha1"
-	"github.com/tektoncd/pipeline/pkg/contexts"
 	"github.com/tektoncd/pipeline/pkg/list"
-	"github.com/tektoncd/pipeline/pkg/names"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"knative.dev/pkg/apis"
@@ -39,19 +39,29 @@ const (
 	ReasonConditionCheckFailed = "ConditionCheckFailed"
 )
 
+// SkippingReason explains why a task was skipped
 type SkippingReason string
 
 const (
-	WhenExpressionsSkip       SkippingReason = "WhenExpressionsSkip"
-	ConditionsSkip            SkippingReason = "ConditionsSkip"
-	ParentTasksSkip           SkippingReason = "ParentTasksSkip"
-	IsStoppingSkip            SkippingReason = "IsStoppingSkip"
+	// WhenExpressionsSkip means the task was skipped due to at least one of its when expressions evaluating to false
+	WhenExpressionsSkip SkippingReason = "WhenExpressionsSkip"
+	// ConditionsSkip means the task was skipped due to at least one of its conditions failing
+	ConditionsSkip SkippingReason = "ConditionsSkip"
+	// ParentTasksSkip means the task was skipped because its parent was skipped
+	ParentTasksSkip SkippingReason = "ParentTasksSkip"
+	// IsStoppingSkip means the task was skipped because the pipeline run is stopping
+	IsStoppingSkip SkippingReason = "IsStoppingSkip"
+	// IsGracefullyCancelledSkip means the task was skipped because the pipeline run has been gracefully cancelled
 	IsGracefullyCancelledSkip SkippingReason = "IsGracefullyCancelledSkip"
-	IsGracefullyStoppedSkip   SkippingReason = "IsGracefullyStoppedSkip"
-	MissingResultsSkip        SkippingReason = "MissingResultsSkip"
-	None                      SkippingReason = "None"
+	// IsGracefullyStoppedSkip means the task was skipped because the pipeline run has been gracefully stopped
+	IsGracefullyStoppedSkip SkippingReason = "IsGracefullyStoppedSkip"
+	// MissingResultsSkip means the task was skipped because it's missing necessary results
+	MissingResultsSkip SkippingReason = "MissingResultsSkip"
+	// None means the task was not skipped
+	None SkippingReason = "None"
 )
 
+// TaskSkipStatus stores whether a task was skipped and why
 type TaskSkipStatus struct {
 	IsSkipped      bool
 	SkippingReason SkippingReason
@@ -510,7 +520,7 @@ func ResolvePipelineRunTask(
 		} else {
 			spec = task.TaskSpec.TaskSpec
 		}
-		spec.SetDefaults(contexts.WithUpgradeViaDefaulting(ctx))
+		spec.SetDefaults(ctx)
 		rtr, err := resolvePipelineTaskResources(task, &spec, taskName, kind, providedResources)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't match referenced resources with declared resources: %w", err)
@@ -541,7 +551,7 @@ func getConditionCheckName(taskRunStatus map[string]*v1beta1.PipelineRunTaskRunS
 			}
 		}
 	}
-	return names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("%s-%s", trName, conditionRegisterName))
+	return kmeta.ChildName(trName, fmt.Sprintf("-%s", conditionRegisterName))
 }
 
 // GetTaskRunName should return a unique name for a `TaskRun` if one has not already been defined, and the existing one otherwise.
@@ -552,7 +562,7 @@ func GetTaskRunName(taskRunsStatus map[string]*v1beta1.PipelineRunTaskRunStatus,
 		}
 	}
 
-	return names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("%s-%s", prName, ptName))
+	return kmeta.ChildName(prName, fmt.Sprintf("-%s", ptName))
 }
 
 // getRunName should return a unique name for a `Run` if one has not already
@@ -563,8 +573,7 @@ func getRunName(runsStatus map[string]*v1beta1.PipelineRunRunStatus, ptName, prN
 			return k
 		}
 	}
-
-	return names.SimpleNameGenerator.RestrictLengthWithRandomSuffix(fmt.Sprintf("%s-%s", prName, ptName))
+	return kmeta.ChildName(prName, fmt.Sprintf("-%s", ptName))
 }
 
 func resolveConditionChecks(pt *v1beta1.PipelineTask, taskRunStatus map[string]*v1beta1.PipelineRunTaskRunStatus, taskRunName string, getTaskRun resources.GetTaskRun, getCondition GetCondition, providedResources map[string]*resourcev1alpha1.PipelineResource) ([]*ResolvedConditionCheck, error) {

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package limitrange
 
 import (
@@ -30,6 +31,7 @@ func isZero(q resource.Quantity) bool {
 	return (&q).IsZero()
 }
 
+// NewTransformer returns a pod.Transformer that will modify limits if needed
 func NewTransformer(ctx context.Context, namespace string, lister corev1listers.LimitRangeLister) pod.Transformer {
 	return func(p *corev1.Pod) (*corev1.Pod, error) {
 		limitRange, err := getVirtualLimitRange(ctx, namespace, lister)
@@ -113,7 +115,11 @@ func getDefaultRequest(limitRange *corev1.LimitRange, nbContainers int) corev1.R
 				if item.Min != nil {
 					min = item.Min[name]
 				}
-				r[name] = takeTheMax(request, *resource.NewMilliQuantity(defaultRequest.MilliValue()/int64(nbContainers), defaultRequest.Format), min)
+				if name == corev1.ResourceMemory || name == corev1.ResourceEphemeralStorage {
+					r[name] = takeTheMax(request, *resource.NewQuantity(defaultRequest.Value()/int64(nbContainers), defaultRequest.Format), min)
+				} else {
+					r[name] = takeTheMax(request, *resource.NewMilliQuantity(defaultRequest.MilliValue()/int64(nbContainers), defaultRequest.Format), min)
+				}
 			}
 		}
 	}

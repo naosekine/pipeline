@@ -71,19 +71,17 @@ spec:
           "-nop-image", "ko://github.com/tektoncd/pipeline/cmd/nop",
           "-imagedigest-exporter-image", "ko://github.com/tektoncd/pipeline/cmd/imagedigestexporter",
           "-pr-image", "ko://github.com/tektoncd/pipeline/cmd/pullrequest-init",
+          "-workingdirinit-image", "ko://github.com/tektoncd/pipeline/cmd/workingdirinit",
 
           # This is gcr.io/google.com/cloudsdktool/cloud-sdk:302.0.0-slim
           "-gsutil-image", "gcr.io/google.com/cloudsdktool/cloud-sdk@sha256:27b2c22bf259d9bc1a291e99c63791ba0c27a04d2db0a43241ba0f1f20f4067f",
           # The shell image must be root in order to create directories and copy files to PVCs.
-          # gcr.io/distroless/base:debug as of Apirl 17, 2021
+          # gcr.io/distroless/base:debug as of October 21, 2021
           # image shall not contains tag, so it will be supported on a runtime like cri-o
-          "-shell-image", "gcr.io/distroless/base@sha256:aa4fd987555ea10e1a4ec8765da8158b5ffdfef1e72da512c7ede509bc9966c4",
+          "-shell-image", "gcr.io/distroless/base@sha256:cfdc553400d41b47fd231b028403469811fcdbc0e69d66ea8030c5a0b5fbac2b",
           # for script mode to work with windows we need a powershell image
           # pinning to nanoserver tag as of July 15 2021
           "-shell-image-win", "mcr.microsoft.com/powershell:nanoserver@sha256:b6d5ff841b78bdf2dfed7550000fd4f3437385b8fa686ec0f010be24777654d6",
-          # Experimental. Uncomment below to disable TaskRun and PipelineRun
-          # reconcilers' built-in taskRef and pipelineRef resolution procedures.
-          # "-experimental-disable-in-tree-resolution",
         ]
         volumeMounts:
         - name: config-logging
@@ -95,17 +93,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        # These phony AWS credentials are here to work around a bug in the aws go sdk
-        # that causes extremely long delays in the execution of tasks after the initial
-        # deployment of the Tekton Pipelines controller. See issue https://github.com/tektoncd/pipeline/issues/4087
-        # for more information.
-        - name: AWS_ACCESS_KEY_ID
-          value: foobarbaz
-        - name: AWS_SECRET_ACCESS_KEY
-          value: foobarbaz
-        - name: AWS_DEFAULT_REGION
-          value: foobarbaz
-
         # If you are changing these names, you will also need to update
         # the controller's Role in 200-role.yaml to include the new
         # values in the "configmaps" "get" rule.
@@ -138,6 +125,10 @@ spec:
           runAsUser: 65532
           runAsGroup: 65532
         ports:
+        - name: metrics
+          containerPort: 9090
+        - name: profiling
+          containerPort: 8008
         - name: probes
           containerPort: 8080
         livenessProbe:
@@ -186,6 +177,9 @@ spec:
     port: 9090
     protocol: TCP
     targetPort: 9090
+  - name: http-profiling
+    port: 8008
+    targetPort: 8008
   - name: probes
     port: 8080
   selector:

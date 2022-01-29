@@ -61,8 +61,8 @@ s390x:
 ppc64le:
 	GOOS=linux GOARCH=ppc64le go build -mod=vendor $(LDFLAGS) ./cmd/...
 
-KO = $(BIN)/ko
-$(BIN)/ko: PACKAGE=github.com/google/ko/cmd/ko
+KO = $(or ${KO_BIN},${KO_BIN},$(BIN)/ko)
+$(BIN)/ko: PACKAGE=github.com/google/ko
 
 .PHONY: apply
 apply: | $(KO) ; $(info $(M) ko apply -f config/) @ ## Apply config to the current cluster
@@ -164,7 +164,7 @@ errcheck: | $(ERRCHECK) ; $(info $(M) running errcheck…) ## Run errcheck
 
 GOLANGCILINT = $(BIN)/golangci-lint
 $(BIN)/golangci-lint: ; $(info $(M) getting golangci-lint $(GOLANGCI_VERSION))
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(BIN) $(GOLANGCI_VERSION)
+	cd tools; GOBIN=$(BIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_VERSION)
 
 .PHONY: golangci-lint
 golangci-lint: | $(GOLANGCILINT) ; $(info $(M) running golangci-lint…) @ ## Run golangci-lint
@@ -196,4 +196,5 @@ help:
 
 .PHONY: version
 version:
+
 	@echo $(VERSION)

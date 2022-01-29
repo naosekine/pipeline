@@ -7,23 +7,30 @@ weight: 300
 
 # `TaskRuns`
 
-- [Overview](#taskruns)
+<!-- toc -->
+- [Overview](#overview)
 - [Configuring a `TaskRun`](#configuring-a-taskrun)
   - [Specifying the target `Task`](#specifying-the-target-task)
   - [Tekton Bundles](#tekton-bundles)
   - [Specifying `Parameters`](#specifying-parameters)
+    - [Implicit Parameters](#implicit-parameters)
+    - [Extra Parameters](#extra-parameters)
   - [Specifying `Resources`](#specifying-resources)
-  - [Specifying `ServiceAccount` credentials](#specifying-serviceaccount-credentials)
+  - [Specifying `Resource` limits](#specifying-resource-limits)
   - [Specifying a `Pod` template](#specifying-a-pod-template)
   - [Specifying `Workspaces`](#specifying-workspaces)
   - [Specifying `Sidecars`](#specifying-sidecars)
   - [Specifying `LimitRange` values](#specifying-limitrange-values)
   - [Configuring the failure timeout](#configuring-the-failure-timeout)
+  - [Specifying `ServiceAccount` credentials](#specifying-serviceaccount-credentials)
 - [Monitoring execution status](#monitoring-execution-status)
   - [Monitoring `Steps`](#monitoring-steps)
+  - [Steps](#steps)
   - [Monitoring `Results`](#monitoring-results)
 - [Cancelling a `TaskRun`](#cancelling-a-taskrun)
 - [Debugging a `TaskRun`](#debugging-a-taskrun)
+    - [Breakpoint on Failure](#breakpoint-on-failure)
+    - [Debug Environment](#debug-environment)
 - [Events](events.md#taskruns)
 - [Running a TaskRun Hermetically](hermetic.md)
 - [Code examples](#code-examples)
@@ -31,9 +38,10 @@ weight: 300
   - [Example `TaskRun` with an embedded `Task`](#example-taskrun-with-an-embedded-task)
   - [Reusing a `Task`](#reusing-a-task)
   - [Using custom `ServiceAccount` credentials](#using-custom-serviceaccount-credentials)
-  - [Running step containers as a non-root user](#running-step-containers-as-a-non-root-user)
+  - [Running Step Containers as a Non Root User](#running-step-containers-as-a-non-root-user)
+<!-- /toc -->
 
-# Overview
+## Overview
 
 A `TaskRun` allows you to instantiate and execute a [`Task`](tasks.md) on-cluster. A `Task` specifies one or more
 `Steps` that execute container images and each container image performs a specific piece of build work. A `TaskRun` executes the
@@ -228,6 +236,11 @@ go through the complexity of checking each `Task` and providing only the require
 
 ### Specifying `Resources`
 
+> :warning: **`PipelineResources` are [deprecated](deprecations.md#deprecation-table).**
+>
+> Consider using replacement features instead. Read more in [documentation](migrating-v1alpha1-to-v1beta1.md#replacing-pipelineresources-with-tasks)
+> and [TEP-0074](https://github.com/tektoncd/community/blob/main/teps/0074-deprecate-pipelineresources.md).
+
 If a `Task` requires [`Resources`](tasks.md#specifying-resources) (that is, `inputs` and `outputs`) you must
 specify them in your `TaskRun` definition. You can specify `Resources` by reference to existing
 [`PipelineResource` objects](resources.md) or embed their definitions directly in the `TaskRun`.
@@ -370,7 +383,7 @@ object(s), if present. Any `Request` or `Limit` specified by the user (on `Task`
 
 For more information, see the [`LimitRange` support in Pipeline](./limitrange.md).
 
-## Configuring the failure timeout
+### Configuring the failure timeout
 
 You can use the `timeout` field to set the `TaskRun's` desired timeout value. If you do not specify this
 value for the `TaskRun`, the global default timeout value applies. If you set the timeout to 0, the `TaskRun` will
@@ -390,7 +403,7 @@ If a `TaskRun` runs longer than its timeout value, the pod associated with the `
 means that the logs of the `TaskRun` are not preserved. The deletion of the `TaskRun` pod is necessary in order to
 stop `TaskRun` step containers from running.
 
-### Specifying `ServiceAccount' credentials
+### Specifying `ServiceAccount` credentials
 
 You can execute the `Task` in your `TaskRun` with a specific set of credentials by
 specifying a `ServiceAccount` object name in the `serviceAccountName` field in your `TaskRun`
@@ -420,7 +433,7 @@ conditions:
     reason: Succeeded
     status: "True"
     type: Succeeded
-podName: status-taskrun-pod-6488ef
+podName: status-taskrun-pod
 startTime: "2019-08-12T18:22:51Z"
 steps:
   - container: step-hello
@@ -440,8 +453,8 @@ The following tables shows how to read the overall status of a `TaskRun`:
 :-------|:-------|:---------------------:|--------------:
 Unknown|Started|No|The TaskRun has just been picked up by the controller.
 Unknown|Pending|No|The TaskRun is waiting on a Pod in status Pending.
-Unknown|Running|No|The TaskRun has been validate and started to perform its work.
-Unknown|TaskRunCancelled|No|The user requested the TaskRun to be cancelled. Cancellation has not be done yet.
+Unknown|Running|No|The TaskRun has been validated and started to perform its work.
+Unknown|TaskRunCancelled|No|The user requested the TaskRun to be cancelled. Cancellation has not been done yet.
 True|Succeeded|Yes|The TaskRun completed successfully.
 False|Failed|Yes|The TaskRun failed because one of the steps failed.
 False|\[Error message\]|No|The TaskRun encountered a non-permanent error, and it's still running. It may ultimately succeed.
@@ -450,6 +463,21 @@ False|TaskRunCancelled|Yes|The TaskRun was cancelled successfully.
 False|TaskRunTimeout|Yes|The TaskRun timed out.
 
 When a `TaskRun` changes status, [events](events.md#taskruns) are triggered accordingly.
+
+The name of the `Pod` owned by a `TaskRun`  is univocally associated to the owning resource. 
+If a `TaskRun` resource is deleted and created with the same name, the child `Pod` will be created with the same name
+as before. The base format of the name is `<taskrun-name>-pod`. The name may vary according to the logic of
+[`kmeta.ChildName`](https://pkg.go.dev/github.com/knative/pkg/kmeta#ChildName). In case of retries of a `TaskRun`
+triggered by the `PipelineRun` controller, the base format of the name is `<taskrun-name>-pod-retry<N>` starting from
+the first retry.
+
+Some examples:
+
+| `TaskRun` Name       | `Pod` Name    |
+|----------------------|---------------|
+| task-run             | task-run-pod  |
+| task-run-0123456789-0123456789-0123456789-0123456789-0123456789-0123456789 | task-run-0123456789-01234560d38957287bb0283c59440df14069f59-pod |
+
 
 ### Monitoring `Steps`
 
@@ -509,9 +537,9 @@ spec:
 ```
 
 
-### Debugging a `TaskRun`
+## Debugging a `TaskRun`
 
-#### Breakpoint on Failure
+### Breakpoint on Failure
 
 TaskRuns can be halted on failure for troubleshooting by providing the following spec patch as seen below.
 
@@ -527,10 +555,10 @@ change done by the user (running the debug-continue or debug-fail-continue scrip
 During this time, the user/client can get remote shell access to the step container with a command such as the following.
 
 ```bash
-kubectl exec -it print-date-d7tj5-pod-w5qrn -c step-print-date-human-readable
+kubectl exec -it print-date-d7tj5-pod -c step-print-date-human-readable
 ```
 
-#### Debug Environment
+### Debug Environment
 
 After the user/client has access to the container environment, they can scour for any missing parts because of which
 their step might have failed.
@@ -778,12 +806,21 @@ spec:
   resources:
     inputs:
       - name: workspace
-        type: git
-  steps:
-    - name: config
-      image: ubuntu
-      command: ["/bin/bash"]
-      args: ["-c", "cat README.md"]
+        resourceSpec:
+          type: git
+          params:
+            - name: url
+              value: https://github.com/tektoncd/pipeline.git
+  taskSpec:
+    resources:
+      inputs:
+        - name: workspace
+          type: git
+    steps:
+      - name: config
+        image: ubuntu
+        command: ["/bin/bash"]
+        args: ["-c", "cat README.md"]
 ```
 
 In the above code snippet, `serviceAccountName: test-build-robot-git-ssh` references the following
